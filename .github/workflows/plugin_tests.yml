@@ -65,29 +65,18 @@ jobs:
       - name: Build
         run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
-      - name: Upload CLI tools
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-tools-${{ matrix.os }}
-          path: |
-            build/**/karplus-strong*
-            build/**/wav-write*
-            build/**/wav-read*
-            build/**/sine-sweep*
-          if-no-files-found: warn
-
       - name: Upload Plugin (VST3)
         uses: actions/upload-artifact@v4
         with:
           name: plugin-vst3-${{ matrix.os }}
-          path: build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          path: build/KarplusStrongPlugin/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
           if-no-files-found: warn
 
       - name: Upload Standalone
         uses: actions/upload-artifact@v4
         with:
           name: standalone-${{ matrix.os }}
-          path: build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
+          path: build/KarplusStrongPlugin/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
           if-no-files-found: warn
 
   # ===========================================================================
@@ -115,6 +104,8 @@ jobs:
       - name: Install pluginval (Linux)
         if: runner.os == 'Linux'
         run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
           curl -L https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip -o pluginval.zip
           unzip pluginval.zip
           chmod +x pluginval
@@ -186,24 +177,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
-      - name: Download CLI tools
-        uses: actions/download-artifact@v4
-        with:
-          name: cli-tools-${{ matrix.os }}
-          path: build
-
       - name: Download plugin
         uses: actions/download-artifact@v4
         with:
           name: plugin-vst3-${{ matrix.os }}
           path: build/KarplusStrongPlugin_artefacts/Release/VST3
-
-      - name: Make executables runnable (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          find build -type f -name "karplus-strong" -exec chmod +x {} \;
-          find build -type f -name "wav-*" -exec chmod +x {} \;
-          find build -type f -name "sine-sweep" -exec chmod +x {} \;
 
       - name: Install test dependencies
         run: pip install -r tests/requirements.txt
