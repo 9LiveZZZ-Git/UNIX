@@ -1,4 +1,5 @@
-#include <JuceHeader.h>
+#include <juce_core/juce_core.h>
+#include <juce_audio_basics/juce_audio_basics.h>
 #include "DSP/DelayLine.h"
 #include "DSP/MeanFilter.h"
 #include "DSP/KarplusStrong.h"

@@ -33,7 +33,7 @@ else()
     FetchContent_Declare(
         JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG 7.0.9
+        GIT_TAG 8.0.4
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
@@ -220,6 +220,8 @@ if(BUILD_TESTS)
     target_compile_definitions(KarplusStrongTests PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
     )
 
     add_test(NAME DSPTests COMMAND KarplusStrongTests)
