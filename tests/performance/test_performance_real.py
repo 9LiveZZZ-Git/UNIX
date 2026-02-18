@@ -2,6 +2,7 @@
 Real Performance Tests (using DawDreamer)
 
 Actual CPU and latency measurements using the loaded plugin.
+Synth-agnostic: works with any instrument plugin.
 """
 
 import time
@@ -41,11 +42,7 @@ class TestRealPerformance:
     @pytest.mark.performance
     @pytest.mark.requires_plugin
     def test_cpu_single_voice(self, loaded_plugin: DawDreamerHost, thresholds):
-        """
-        Measure CPU usage for a single voice.
-
-        Should be very low for Karplus-Strong.
-        """
+        """Measure CPU usage for a single voice."""
         result = loaded_plugin.render_note(
             note=60,
             velocity=100,
@@ -119,7 +116,6 @@ class TestRealPerformance:
         print(f"  Samples: {latency_samples}")
         print(f"  Time: {latency_ms:.2f} ms")
 
-        # Karplus-Strong shouldn't have significant latency
         assert latency_ms < 50, f"Latency {latency_ms:.1f}ms too high"
 
     @pytest.mark.performance

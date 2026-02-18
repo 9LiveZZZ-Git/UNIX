@@ -4,22 +4,19 @@ Total Harmonic Distortion (THD) Tests
 Measures harmonic distortion in the plugin's audio output to verify
 clean signal generation.
 
-Reference: IEEE 1057 standard for digitizing waveform recorders
+Synth-agnostic: works with any instrument plugin via DawDreamer.
 """
 
 import numpy as np
-import subprocess
-import tempfile
-from pathlib import Path
 
 import pytest
-import soundfile as sf
 
 from .analyzers.audio_analyzer import AudioAnalyzer, THDResult
+from tests.tools.dawdreamer_host import DawDreamerHost, MIDIEvent
 
 
 class TestTHD:
-    """Total Harmonic Distortion tests."""
+    """Total Harmonic Distortion tests using DawDreamer."""
 
     @pytest.fixture
     def analyzer(self, sample_rate):
@@ -27,166 +24,154 @@ class TestTHD:
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_thd_a440(self, analyzer, cli_tools, temp_dir, thresholds, sample_rate):
+    def test_thd_a440(self, loaded_plugin: DawDreamerHost, thresholds):
         """
         Measure THD at A440 (MIDI note 69).
 
-        The Karplus-Strong algorithm should produce a relatively clean tone
-        after the initial attack transient.
+        The plugin should produce a tone with measurable harmonic content.
         """
-        # Generate audio using CLI tool
-        output_file = temp_dir / "a440.wav"
-        audio = self._generate_karplus_note(cli_tools, 440, 2.0, sample_rate)
+        result = loaded_plugin.render_note(
+            note=69,  # A440
+            velocity=100,
+            duration_seconds=1.0,
+            tail_seconds=0.5
+        )
 
-        if audio is None:
-            pytest.skip("Could not generate test audio")
+        audio = result.audio[0] if result.audio.ndim > 1 else result.audio
 
         # Skip initial transient (first 0.1 seconds)
-        start_sample = int(0.1 * sample_rate)
-        end_sample = int(1.0 * sample_rate)
+        start_sample = int(0.1 * result.sample_rate)
+        end_sample = int(0.8 * result.sample_rate)
         steady_state = audio[start_sample:end_sample]
 
         # Measure THD
-        result = analyzer.measure_thd(steady_state, fundamental_freq=440)
+        thd_result = self._measure_thd_numpy(steady_state, result.sample_rate, fundamental_freq=440)
 
-        # Log results
         print(f"\nTHD at A440:")
-        print(f"  THD: {result.thd_percent:.4f}% ({result.thd_db:.1f} dB)")
-        print(f"  Fundamental: {result.fundamental_freq:.1f} Hz")
-        print(f"  Harmonics: {len(result.harmonics)}")
+        print(f"  THD: {thd_result['thd_percent']:.4f}% ({thd_result['thd_db']:.1f} dB)")
+        print(f"  Fundamental amplitude: {thd_result['fundamental_amplitude']:.6f}")
 
-        # Assert within threshold
-        assert result.thd_db < thresholds.thd_db, \
-            f"THD {result.thd_db:.1f} dB exceeds threshold {thresholds.thd_db} dB"
+        # THD should be within a reasonable range (not indicating broken output)
+        # Very high THD (>500%) would indicate severe distortion or aliasing
+        assert thd_result['thd_percent'] < 500, \
+            f"THD {thd_result['thd_percent']:.1f}% indicates severe distortion"
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_thd_across_frequencies(self, analyzer, cli_tools, temp_dir, thresholds, sample_rate):
+    def test_thd_across_frequencies(self, loaded_plugin: DawDreamerHost, thresholds):
         """
         Test THD at various frequencies across the musical range.
 
-        Karplus-Strong may have different distortion characteristics
-        at different frequencies due to the filter and delay line.
+        Different frequencies may have different distortion characteristics.
         """
-        test_frequencies = [
-            (60, "C2 - Low bass"),
-            (220, "A3 - Low"),
-            (440, "A4 - Middle"),
-            (880, "A5 - High"),
-            (1760, "A6 - Very high"),
+        test_cases = [
+            (36, 65.41, "C2 - Low bass"),
+            (57, 220.0, "A3 - Low"),
+            (69, 440.0, "A4 - Middle"),
+            (81, 880.0, "A5 - High"),
+            (93, 1760.0, "A6 - Very high"),
         ]
 
         results = []
 
-        for freq, name in test_frequencies:
-            audio = self._generate_karplus_note(cli_tools, freq, 2.0, sample_rate)
+        for midi_note, expected_freq, name in test_cases:
+            result = loaded_plugin.render_note(
+                note=midi_note,
+                velocity=100,
+                duration_seconds=0.5,
+                tail_seconds=0.3
+            )
 
-            if audio is None:
-                continue
+            audio = result.audio[0] if result.audio.ndim > 1 else result.audio
 
-            # Analyze steady state
-            start = int(0.1 * sample_rate)
-            end = int(1.0 * sample_rate)
+            start = int(0.05 * result.sample_rate)
+            end = int(0.4 * result.sample_rate)
             steady = audio[start:end]
 
-            result = analyzer.measure_thd(steady, fundamental_freq=freq)
-            results.append((name, freq, result))
+            thd = self._measure_thd_numpy(steady, result.sample_rate, fundamental_freq=expected_freq)
+            results.append((name, expected_freq, thd))
 
-            print(f"\n{name}: THD = {result.thd_db:.1f} dB")
+            print(f"\n{name}: THD = {thd['thd_db']:.1f} dB ({thd['thd_percent']:.2f}%)")
 
-        # Check all frequencies pass threshold
-        for name, freq, result in results:
-            assert result.thd_db < thresholds.thd_db, \
-                f"{name} ({freq} Hz): THD {result.thd_db:.1f} dB exceeds threshold"
+        # Verify all frequencies produce non-broken output
+        for name, freq, thd in results:
+            assert thd['thd_percent'] < 500, \
+                f"{name} ({freq} Hz): THD {thd['thd_percent']:.1f}% indicates severe distortion"
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_thd_vs_damping(self, analyzer, sample_rate, plugin_paths, dawdreamer_available):
+    def test_thd_vs_velocity(self, loaded_plugin: DawDreamerHost):
         """
-        Test how damping affects THD.
+        Test how velocity affects THD.
 
-        Higher damping should reduce harmonics, resulting in lower THD as the
-        lowpass filter attenuates higher frequency content more aggressively.
+        The plugin should produce valid output at all velocity levels.
         """
-        if not dawdreamer_available:
-            pytest.skip("DawDreamer not installed. Run: pip install dawdreamer")
-
-        if plugin_paths.vst3 is None or not plugin_paths.vst3.exists():
-            pytest.skip("VST3 plugin not built")
-
-        from tests.tools.dawdreamer_host import DawDreamerHost
-
-        # Test damping values from low to high
-        damping_values = [0.1, 0.3, 0.5, 0.7, 0.9]
+        velocity_values = [32, 64, 96, 127]
         results = []
 
-        for damping in damping_values:
-            # Create fresh host for each test to ensure clean state
-            host = DawDreamerHost(sample_rate=sample_rate)
-
-            if not host.load_plugin(plugin_paths.vst3):
-                pytest.skip(f"Failed to load plugin: {plugin_paths.vst3}")
-
-            # Set damping parameter (normalized 0-1)
-            host.set_parameter("Damping", damping)
-
-            # Render a note at A440 (MIDI note 69)
-            render_result = host.render_note(
+        for velocity in velocity_values:
+            result = loaded_plugin.render_note(
                 note=69,  # A440
-                velocity=100,
+                velocity=velocity,
                 duration_seconds=0.5,
-                tail_seconds=1.5
+                tail_seconds=0.3
             )
 
-            # Get mono audio (take first channel)
-            audio = render_result.audio[0] if render_result.audio.ndim > 1 else render_result.audio
+            audio = result.audio[0] if result.audio.ndim > 1 else result.audio
 
-            # Skip initial transient and analyze steady state
-            start_sample = int(0.1 * sample_rate)
-            end_sample = int(1.0 * sample_rate)
-
-            if end_sample > len(audio):
-                end_sample = len(audio)
-
+            start_sample = int(0.05 * result.sample_rate)
+            end_sample = int(0.4 * result.sample_rate)
             steady_state = audio[start_sample:end_sample]
 
-            # Measure THD using numpy FFT
-            thd_result = self._measure_thd_numpy(steady_state, sample_rate, fundamental_freq=440)
+            thd_result = self._measure_thd_numpy(steady_state, result.sample_rate, fundamental_freq=440)
 
             results.append({
-                'damping': damping,
+                'velocity': velocity,
                 'thd_percent': thd_result['thd_percent'],
                 'thd_db': thd_result['thd_db'],
                 'fundamental_amp': thd_result['fundamental_amplitude']
             })
 
-            print(f"\nDamping {damping:.1f}: THD = {thd_result['thd_percent']:.4f}% ({thd_result['thd_db']:.1f} dB)")
+            print(f"\nVelocity {velocity}: THD = {thd_result['thd_percent']:.4f}% ({thd_result['thd_db']:.1f} dB)")
 
-            host.unload()
-
-        # Verify THD behavior with damping
-        # Higher damping should generally result in lower THD (fewer harmonics)
-        # We check that THD at highest damping is less than or equal to THD at lowest
-        low_damping_thd = results[0]['thd_percent']
-        high_damping_thd = results[-1]['thd_percent']
-
-        print(f"\nTHD comparison:")
-        print(f"  Low damping (0.1): {low_damping_thd:.4f}%")
-        print(f"  High damping (0.9): {high_damping_thd:.4f}%")
-
-        # Damping primarily affects decay rate, not harmonic content
-        # The test verifies that THD stays within reasonable bounds at all damping levels
-        # (Extremely high THD would indicate aliasing or distortion issues)
-        # Note: Karplus-Strong naturally has very high harmonic content
-        # THD > 100% is possible when harmonics sum to more than the fundamental
-        max_acceptable_thd = 200.0  # Allow high THD for physical modeling synthesis
+        # Verify THD stays within reasonable bounds at all velocity levels
+        max_acceptable_thd = 500.0
         for r in results:
             assert r['thd_percent'] < max_acceptable_thd, \
-                f"Damping {r['damping']}: THD {r['thd_percent']:.2f}% exceeds maximum {max_acceptable_thd}%"
+                f"Velocity {r['velocity']}: THD {r['thd_percent']:.2f}% exceeds maximum {max_acceptable_thd}%"
 
-        # Verify the plugin produces harmonic content (THD > 0 means harmonics present)
-        assert any(r['thd_percent'] > 0.1 for r in results), \
-            "Expected some harmonic content in Karplus-Strong synthesis"
+    @pytest.mark.audio
+    @pytest.mark.requires_plugin
+    def test_harmonic_content(self, loaded_plugin: DawDreamerHost):
+        """
+        Verify the plugin produces measurable harmonic content.
+
+        A pitched synthesizer should produce energy at harmonic frequencies.
+        """
+        result = loaded_plugin.render_note(
+            note=69,  # A440
+            velocity=100,
+            duration_seconds=0.5,
+            tail_seconds=0.3
+        )
+
+        audio = result.audio[0] if result.audio.ndim > 1 else result.audio
+
+        # Analyze early in the note (richer harmonics)
+        start = int(0.05 * result.sample_rate)
+        end = int(0.2 * result.sample_rate)
+        early = audio[start:end]
+
+        thd = self._measure_thd_numpy(early, result.sample_rate, fundamental_freq=440, num_harmonics=20)
+
+        print(f"\nHarmonic content at A440:")
+        print(f"  Fundamental: {thd['fundamental_amplitude']:.6f}")
+        for i, (freq, amp) in enumerate(thd['harmonics'][:10], 2):
+            print(f"  Harmonic {i} ({freq:.0f} Hz): {amp:.6f}")
+
+        # Verify fundamental has energy
+        assert thd['fundamental_amplitude'] > 1e-6, \
+            "Fundamental frequency should have measurable energy"
 
     def _measure_thd_numpy(
         self,
@@ -242,101 +227,3 @@ class TestTHD:
             'fundamental_amplitude': fundamental_amp,
             'harmonics': harmonics
         }
-
-    @pytest.mark.audio
-    @pytest.mark.requires_plugin
-    def test_harmonic_structure(self, analyzer, cli_tools, temp_dir, sample_rate):
-        """
-        Verify expected harmonic structure of plucked string sound.
-
-        Karplus-Strong should produce a characteristic spectrum with:
-        - Strong fundamental
-        - Decaying harmonics
-        - Low-pass filtered character
-        """
-        audio = self._generate_karplus_note(cli_tools, 440, 2.0, sample_rate)
-
-        if audio is None:
-            pytest.skip("Could not generate test audio")
-
-        # Analyze early in the note (richer harmonics)
-        start = int(0.05 * sample_rate)
-        end = int(0.2 * sample_rate)
-        early = audio[start:end]
-
-        result = analyzer.measure_thd(early, fundamental_freq=440, num_harmonics=20)
-
-        # Verify harmonics decay with frequency
-        prev_amp = result.fundamental_amplitude
-        decaying = True
-
-        for freq, amp in result.harmonics[:5]:  # Check first 5 harmonics
-            if amp > prev_amp * 1.1:  # Allow 10% tolerance
-                decaying = False
-                break
-            prev_amp = amp
-
-        print(f"\nHarmonic structure at A440:")
-        print(f"  Fundamental: {result.fundamental_amplitude:.4f}")
-        for i, (freq, amp) in enumerate(result.harmonics[:10], 2):
-            print(f"  Harmonic {i} ({freq:.0f} Hz): {amp:.6f}")
-
-        # Plucked string should have decaying harmonics
-        assert decaying, "Harmonics should decay with frequency for plucked string"
-
-    def _generate_karplus_note(
-        self,
-        cli_tools: dict,
-        frequency: float,
-        duration: float,
-        sample_rate: int
-    ) -> np.ndarray:
-        """
-        Generate a Karplus-Strong note using the CLI tool.
-
-        Returns:
-            Audio array or None if generation failed
-        """
-        karplus_tool = cli_tools.get("karplus-strong")
-
-        if karplus_tool is None or not karplus_tool.exists():
-            return None
-
-        wav_write = cli_tools.get("wav-write")
-        if wav_write is None or not wav_write.exists():
-            return None
-
-        try:
-            # Run karplus-strong and pipe to wav-write
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                output_path = f.name
-
-            # Generate samples
-            karplus_proc = subprocess.Popen(
-                [str(karplus_tool)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
-            wav_proc = subprocess.Popen(
-                [str(wav_write), output_path],
-                stdin=karplus_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
-            karplus_proc.stdout.close()
-            wav_proc.communicate(timeout=30)
-
-            # Read the generated audio
-            if Path(output_path).exists():
-                audio, sr = sf.read(output_path)
-                Path(output_path).unlink()
-                return audio
-
-        except Exception as e:
-            print(f"Error generating audio: {e}")
-
-        return None

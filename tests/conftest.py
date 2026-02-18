@@ -44,14 +44,9 @@ def get_build_dir() -> Path:
 
 
 def get_plugin_dir() -> Path:
-    """Get the KarplusStrongPlugin artefacts directory."""
+    """Get the plugin artefacts directory."""
     build = get_build_dir()
-    # Check for nested build directory first (cmake -B build/KarplusStrongPlugin)
-    nested = build / "KarplusStrongPlugin" / "KarplusStrongPlugin_artefacts"
-    if nested.exists():
-        return nested
-    # Fall back to direct location (cmake -B build with parent CMakeLists)
-    return build / "KarplusStrongPlugin_artefacts"
+    return build
 
 
 def get_exe_extension() -> str:
@@ -209,80 +204,82 @@ def thresholds() -> ThresholdConfig:
 
 
 @pytest.fixture(scope="session")
-def plugin_paths() -> PluginPaths:
+def plugin_paths(request) -> PluginPaths:
     """
-    Locate all plugin format paths.
+    Locate plugin paths.
 
-    Searches common build output locations for each format.
+    Uses --plugin-path if provided, otherwise searches plugin/ directory.
+    Synth-agnostic: does NOT auto-discover JUCE or other external builds.
     """
-    plugin_dir = get_plugin_dir()
     paths = PluginPaths()
     system = platform.system()
+    root = get_project_root()
 
-    # Search in Release and Debug configurations
-    for config in ["Release", "Debug", ""]:
-        config_dir = plugin_dir / config if config else plugin_dir
+    # 1. Explicit --plugin-path always wins
+    override = request.config.getoption("--plugin-path", default=None)
+    if override:
+        p = Path(override)
+        if p.exists():
+            suffix = p.suffix.lower()
+            if suffix == ".vst3" or p.name.endswith(".vst3"):
+                paths.vst3 = p
+            elif suffix == ".clap":
+                paths.clap = p
+            elif suffix == ".component":
+                paths.au = p
+            else:
+                # Assume VST3 by default
+                paths.vst3 = p
+            return paths
 
-        # VST3
-        if paths.vst3 is None:
-            vst3_candidates = [
-                config_dir / "VST3" / "Karplus-Strong Synth.vst3",
-                config_dir / "VST3" / "KarplusStrongPlugin.vst3",
-            ]
-            for vst3 in vst3_candidates:
-                if vst3.exists():
-                    paths.vst3 = vst3
+    # 2. Search only in plugin/ directory (our builds, synth-agnostic)
+    plugin_base = root / "plugin"
+    if not plugin_base.exists():
+        return paths
+
+    # VST3: search plugin/*/build/VST3/{Release,Debug}/*.vst3
+    if paths.vst3 is None:
+        for plugin_subdir in sorted(plugin_base.iterdir()):
+            if not plugin_subdir.is_dir():
+                continue
+            for config in ["Release", "Debug"]:
+                vst3_dir = plugin_subdir / "build" / "VST3" / config
+                if vst3_dir.exists():
+                    for vst3 in sorted(vst3_dir.glob("*.vst3")):
+                        if vst3.exists():
+                            paths.vst3 = vst3
+                            break
+                if paths.vst3:
                     break
+            if paths.vst3:
+                break
 
-        # AU (macOS only)
-        if system == "Darwin" and paths.au is None:
-            au_candidates = [
-                config_dir / "AU" / "Karplus-Strong Synth.component",
-                config_dir / "AU" / "KarplusStrongPlugin.component",
-            ]
-            for au in au_candidates:
-                if au.exists():
-                    paths.au = au
+    # CLAP: search plugin/*/build/{Release,Debug}/*.clap
+    if paths.clap is None:
+        for plugin_subdir in sorted(plugin_base.iterdir()):
+            if not plugin_subdir.is_dir():
+                continue
+            for config in ["Release", "Debug"]:
+                clap_dir = plugin_subdir / "build" / config
+                if clap_dir.exists():
+                    for clap in sorted(clap_dir.glob("*.clap")):
+                        if clap.exists():
+                            paths.clap = clap
+                            break
+                if paths.clap:
                     break
-
-        # CLAP
-        if paths.clap is None:
-            clap_candidates = [
-                config_dir / "CLAP" / "Karplus-Strong Synth.clap",
-                config_dir / "CLAP" / "KarplusStrongPlugin.clap",
-            ]
-            for clap in clap_candidates:
-                if clap.exists():
-                    paths.clap = clap
-                    break
-
-        # Standalone
-        if paths.standalone is None:
-            ext = get_exe_extension()
-            standalone_candidates = [
-                config_dir / "Standalone" / f"Karplus-Strong Synth{ext}",
-                config_dir / "Standalone" / f"KarplusStrongPlugin{ext}",
-            ]
-            if system == "Darwin":
-                standalone_candidates.extend([
-                    config_dir / "Standalone" / "Karplus-Strong Synth.app",
-                    config_dir / "Standalone" / "KarplusStrongPlugin.app",
-                ])
-            for standalone in standalone_candidates:
-                if standalone.exists():
-                    paths.standalone = standalone
-                    break
+            if paths.clap:
+                break
 
     return paths
 
 
 @pytest.fixture(scope="session")
 def cli_tools(build_dir) -> Dict[str, Path]:
-    """Dictionary of CLI tool paths."""
+    """Dictionary of CLI tool paths (synth-agnostic)."""
     ext = get_exe_extension()
     tools = {}
     tool_names = [
-        "karplus-strong",
         "wav-write",
         "wav-read",
         "sine-sweep",
@@ -642,6 +639,12 @@ def pytest_addoption(parser):
         default=5,
         type=int,
         help="Pluginval strictness level (1-10)"
+    )
+    parser.addoption(
+        "--sdf-synth-path",
+        action="store",
+        default=None,
+        help="Override SDF Synth VST3 plugin path"
     )
 
 

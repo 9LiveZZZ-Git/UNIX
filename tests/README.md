@@ -1,6 +1,6 @@
 # UNIX Audio Plugin - Test Suite
 
-Comprehensive testing infrastructure for the Karplus-Strong synthesizer plugin.
+Comprehensive testing infrastructure for audio synthesizer plugins.
 
 ## Quick Start
 

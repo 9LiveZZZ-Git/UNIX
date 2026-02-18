@@ -5,9 +5,10 @@ Measures the frequency response characteristics:
 - Fundamental frequency accuracy
 - Harmonic content
 - Bandwidth characteristics
-- Filter behavior (Karplus-Strong lowpass)
+- Spectral evolution over time
 
 These tests characterize the tonal behavior of the synthesizer using DawDreamer.
+Synth-agnostic: works with any instrument plugin.
 """
 
 import numpy as np
@@ -74,9 +75,7 @@ class TestFrequencyResponse:
     @pytest.mark.requires_plugin
     def test_fundamental_accuracy(self, loaded_plugin: DawDreamerHost, thresholds, report_writer):
         """
-        Verify fundamental frequency matches MIDI note.
-
-        Karplus-Strong should produce accurate pitch across the range.
+        Verify fundamental frequency matches MIDI note across the range.
         """
         test_cases = [
             (69, 440.0, "A4"),
@@ -127,62 +126,56 @@ class TestFrequencyResponse:
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_lowpass_characteristic(self, loaded_plugin: DawDreamerHost, report_writer):
+    def test_spectral_decay(self, loaded_plugin: DawDreamerHost, report_writer):
         """
-        Verify Karplus-Strong lowpass filter behavior.
+        Verify the note shows spectral decay after note-off.
 
-        High frequencies should decay faster than low frequencies.
-        The mean filter in the feedback loop creates this characteristic.
+        Audio should show decay between the note-on period and the tail.
         """
         result = loaded_plugin.render_note(
             note=60,  # C4 ~261 Hz
             velocity=100,
-            duration_seconds=1.0,
-            tail_seconds=0.5
+            duration_seconds=0.5,
+            tail_seconds=2.0
         )
 
-        # Analyze spectrum in early vs late portion of note
-        early_start = int(0.05 * result.sample_rate)
-        early_end = int(0.15 * result.sample_rate)
-        late_start = int(0.5 * result.sample_rate)
-        late_end = int(0.6 * result.sample_rate)
+        # Compare during note-on vs well after note-off
+        active_start = int(0.1 * result.sample_rate)
+        active_end = int(0.4 * result.sample_rate)
+        tail_start = int(1.5 * result.sample_rate)
+        tail_end = int(2.0 * result.sample_rate)
 
-        early_audio = result.audio[0, early_start:early_end]
-        late_audio = result.audio[0, late_start:late_end]
+        active_audio = result.audio[0, active_start:active_end]
+        tail_audio = result.audio[0, tail_start:tail_end]
 
-        _, early_db = get_spectrum(early_audio, result.sample_rate)
-        _, late_db = get_spectrum(late_audio, result.sample_rate)
+        active_rms = np.sqrt(np.mean(active_audio ** 2))
+        tail_rms = np.sqrt(np.mean(tail_audio ** 2))
 
-        # Compare decay at different frequency bands
-        low_band = slice(10, len(early_db) // 4)   # Low frequencies
-        high_band = slice(len(early_db) * 2 // 3, len(early_db) - 1)  # High frequencies
+        active_db = 20 * np.log10(active_rms + 1e-10)
+        tail_db = 20 * np.log10(tail_rms + 1e-10)
+        decay = active_db - tail_db
 
-        low_decay = np.mean(early_db[low_band]) - np.mean(late_db[low_band])
-        high_decay = np.mean(early_db[high_band]) - np.mean(late_db[high_band])
+        print(f"\nSpectral decay test:")
+        print(f"  Active RMS: {active_db:.1f} dB")
+        print(f"  Tail RMS: {tail_db:.1f} dB")
+        print(f"  Decay: {decay:.1f} dB")
 
-        print(f"\nLowpass characteristic test:")
-        print(f"  Low frequency decay: {low_decay:.1f} dB")
-        print(f"  High frequency decay: {high_decay:.1f} dB")
-        print(f"  Differential (high decays {high_decay - low_decay:.1f} dB more)")
-
-        # With guitar body reverb and complex resonances, the decay pattern
-        # can vary significantly. Just verify that the audio shows some decay
-        # in at least one band (indicating the note is dying away).
-        passed = low_decay > 0 or high_decay > 0
+        # After note-off, signal should be significantly quieter
+        passed = decay > 10  # At least 10 dB quieter in the tail
 
         report_writer.add_audio_result(create_audio_result(
-            "test_lowpass_characteristic",
+            "test_spectral_decay",
             passed=passed,
-            notes=f"Low decay: {low_decay:.1f}dB, High decay: {high_decay:.1f}dB"
+            notes=f"Active: {active_db:.1f}dB, Tail: {tail_db:.1f}dB, Decay: {decay:.1f}dB"
         ))
 
-        assert passed, f"No decay detected: low={low_decay:.1f}, high={high_decay:.1f}"
+        assert passed, f"Insufficient decay after note-off: {decay:.1f} dB"
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_damping_affects_spectrum(self, loaded_plugin: DawDreamerHost, report_writer):
+    def test_spectral_evolution(self, loaded_plugin: DawDreamerHost, report_writer):
         """
-        Test that the output has expected Karplus-Strong spectral characteristics.
+        Test that the spectrum evolves over the duration of a note.
 
         Early in the note should have richer harmonics than later.
         """
@@ -218,7 +211,7 @@ class TestFrequencyResponse:
         passed = late_h3_ratio < early_h3_ratio + 3  # Allow some tolerance
 
         report_writer.add_audio_result(create_audio_result(
-            "test_damping_affects_spectrum",
+            "test_spectral_evolution",
             passed=passed,
             notes=f"H3 ratio early: {early_h3_ratio:.1f}dB, late: {late_h3_ratio:.1f}dB"
         ))
@@ -274,8 +267,7 @@ class TestFrequencyResponse:
         """
         Measure inharmonicity of overtones.
 
-        Real strings have slightly sharp upper partials due to stiffness.
-        Karplus-Strong is ideally harmonic (integer ratios).
+        Overtones should be close to integer multiples of the fundamental.
         """
         result = loaded_plugin.render_note(note=60, velocity=100, duration_seconds=0.5)
 
@@ -286,9 +278,15 @@ class TestFrequencyResponse:
         freqs, spectrum_db = get_spectrum(audio, result.sample_rate)
         fundamental = 261.63
 
-        # Measure actual harmonic frequencies (find peaks near expected harmonics)
+        # Measure actual harmonic frequencies
+        # Only consider overtones that are within 30 dB of the fundamental
+        # (weak noise peaks at harmonic frequencies should not count)
+        fund_idx = np.argmin(np.abs(freqs - fundamental))
+        fund_level = spectrum_db[fund_idx]
+        min_harmonic_level = fund_level - 30  # Must be within 30 dB of fundamental
+
         harmonics = []
-        for n in range(1, 8):
+        for n in range(2, 8):  # Start from 2nd harmonic (skip fundamental itself)
             expected_harm = fundamental * n
             if expected_harm > result.sample_rate / 2:
                 break
@@ -303,8 +301,12 @@ class TestFrequencyResponse:
                 local_spectrum[~mask] = -200
                 peak_idx = np.argmax(local_spectrum)
                 actual_freq = freqs[peak_idx]
+                peak_level = spectrum_db[peak_idx]
 
-                # Calculate inharmonicity (deviation from integer ratio)
+                # Only measure inharmonicity for significant overtones
+                if peak_level < min_harmonic_level:
+                    continue
+
                 expected_ratio = n
                 actual_ratio = actual_freq / fundamental if fundamental > 0 else 0
                 cents_sharp = 1200 * np.log2(actual_ratio / expected_ratio) if actual_ratio > 0 and expected_ratio > 0 else 0
@@ -312,20 +314,25 @@ class TestFrequencyResponse:
                 harmonics.append((n, expected_harm, actual_freq, cents_sharp))
 
         print(f"\nInharmonicity test:")
+        print(f"  Fundamental level: {fund_level:.1f} dB, min overtone level: {min_harmonic_level:.1f} dB")
         for n, expected, actual, cents in harmonics:
             print(f"  Harmonic {n}: expected {expected:.1f}Hz, got {actual:.1f}Hz ({cents:+.1f} cents)")
 
-        # Karplus-Strong should be mostly harmonic (< 10 cents deviation)
-        max_inharmonicity = max(abs(h[3]) for h in harmonics) if harmonics else 0
-        passed = max_inharmonicity < 20  # Allow 20 cents for numerical precision
+        if not harmonics:
+            # No significant overtones (e.g., pure sine) - that's fine
+            print("  No significant overtones detected - skipping inharmonicity check")
+            passed = True
+        else:
+            max_inharmonicity = max(abs(h[3]) for h in harmonics)
+            passed = max_inharmonicity < 20  # Allow 20 cents
 
         report_writer.add_audio_result(create_audio_result(
             "test_inharmonicity",
             passed=passed,
-            notes=f"Max inharmonicity: {max_inharmonicity:.1f} cents"
+            notes=f"Overtones detected: {len(harmonics)}"
         ))
 
-        assert passed, f"Excessive inharmonicity: {max_inharmonicity:.1f} cents"
+        assert passed, f"Excessive inharmonicity: {max(abs(h[3]) for h in harmonics):.1f} cents"
 
 
 class TestSpectralContent:
@@ -341,7 +348,7 @@ class TestSpectralContent:
         """
         Analyze spectrum during attack phase.
 
-        Initial "pluck" should have rich harmonic content from noise excitation.
+        The initial attack should contain harmonic content.
         """
         result = loaded_plugin.render_note(note=60, velocity=100, duration_seconds=0.5)
 
@@ -389,54 +396,47 @@ class TestSpectralContent:
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_decay_spectrum(self, loaded_plugin: DawDreamerHost, report_writer):
+    def test_note_off_decay(self, loaded_plugin: DawDreamerHost, report_writer):
         """
-        Analyze how spectrum evolves during decay.
+        Verify that audio decays after note-off.
 
-        High frequencies should decay faster (lowpass filtering effect).
+        The signal should be significantly quieter after note release.
         """
-        result = loaded_plugin.render_note(note=60, velocity=100, duration_seconds=2.0)
+        result = loaded_plugin.render_note(
+            note=60,
+            velocity=100,
+            duration_seconds=0.5,
+            tail_seconds=3.0
+        )
 
-        # Sample spectrum at three time points
-        times = [0.1, 0.5, 1.0]  # seconds
-        spectra = []
+        # Measure RMS during active note vs tail
+        active_start = int(0.1 * result.sample_rate)
+        active_end = int(0.4 * result.sample_rate)
+        tail_start = int(2.0 * result.sample_rate)
+        tail_end = int(3.0 * result.sample_rate)
 
-        for t in times:
-            start = int(t * result.sample_rate)
-            end = int((t + 0.1) * result.sample_rate)
-            audio = result.audio[0, start:end]
-            freqs, db = get_spectrum(audio, result.sample_rate)
-            spectra.append((t, freqs, db))
+        active_rms = np.sqrt(np.mean(result.audio[0, active_start:active_end] ** 2))
+        tail_rms = np.sqrt(np.mean(result.audio[0, tail_start:tail_end] ** 2))
 
-        # Measure decay rate at different frequency bands
-        low_idx = len(spectra[0][1]) // 8
-        high_idx = len(spectra[0][1]) * 3 // 4
+        active_db = 20 * np.log10(active_rms + 1e-10)
+        tail_db = 20 * np.log10(tail_rms + 1e-10)
+        decay_db = active_db - tail_db
 
-        print(f"\nSpectral decay test:")
-        for i, (t, freqs, db) in enumerate(spectra):
-            low_energy = np.mean(db[10:low_idx])
-            high_energy = np.mean(db[high_idx:-1])
-            print(f"  t={t:.1f}s: Low band: {low_energy:.1f}dB, High band: {high_energy:.1f}dB")
+        print(f"\nNote-off decay test:")
+        print(f"  Active RMS: {active_db:.1f} dB")
+        print(f"  Tail RMS: {tail_db:.1f} dB")
+        print(f"  Decay: {decay_db:.1f} dB")
 
-        # Calculate decay rates
-        low_decay = spectra[0][2][10:low_idx].mean() - spectra[2][2][10:low_idx].mean()
-        high_decay = spectra[0][2][high_idx:-1].mean() - spectra[2][2][high_idx:-1].mean()
-
-        print(f"  Low band decay: {low_decay:.1f}dB")
-        print(f"  High band decay: {high_decay:.1f}dB")
-
-        # With guitar body reverb, the decay pattern can be complex.
-        # Just verify that both bands show some decay (positive value)
-        # and that the audio doesn't have unexpected artifacts.
-        passed = high_decay > 0 and low_decay > 0  # Both should decay
+        # After note-off, signal should decay substantially
+        passed = decay_db > 20  # At least 20 dB quieter
 
         report_writer.add_audio_result(create_audio_result(
-            "test_decay_spectrum",
+            "test_note_off_decay",
             passed=passed,
-            notes=f"Low decay: {low_decay:.1f}dB, High decay: {high_decay:.1f}dB"
+            notes=f"Decay: {decay_db:.1f}dB (active={active_db:.1f}dB, tail={tail_db:.1f}dB)"
         ))
 
-        assert passed, f"Expected faster high-freq decay: low={low_decay:.1f}, high={high_decay:.1f}"
+        assert passed, f"Insufficient decay after note-off: {decay_db:.1f} dB (expected >20 dB)"
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
@@ -444,8 +444,7 @@ class TestSpectralContent:
         """
         Verify high notes produce clean audio without severe artifacts.
 
-        Physical modeling synthesis with body resonance will have many spectral
-        components, so this test focuses on basic audio quality rather than
+        This test focuses on basic audio quality rather than
         strict harmonic analysis.
         """
         # Play a high note (MIDI 96 = C7 ≈ 2093 Hz)
@@ -660,7 +659,7 @@ class TestFrequencyAccuracy:
         print(f"  Drift: {drift_cents:.1f} cents")
 
         # Allow generous threshold - pitch detection can become unreliable
-        # during decay phase when signal is quiet. 100 cents = 1 semitone.
+        # during decay phase when signal is quiet.
         # During sustain portion (0.1-1.0s), pitch should be stable.
         # At 1.5s the signal may be decayed enough to cause detection issues.
         early_freqs = [p[1] for p in pitches[:3] if p[1] > 0]  # Only first 3 measurements
@@ -670,7 +669,6 @@ class TestFrequencyAccuracy:
             early_drift = 0
 
         # Allow generous threshold - pitch detection can have some variance
-        # especially with physical modeling synthesis and reverb
         passed = early_drift < 150  # 150 cents = 1.5 semitones during sustain
 
         report_writer.add_audio_result(create_audio_result(

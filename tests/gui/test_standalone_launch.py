@@ -45,7 +45,7 @@ class TestStandaloneLaunch:
         launched = gui.launch_app(
             require_standalone,
             wait_seconds=thresholds.launch_timeout_seconds,
-            window_title="Karplus"
+            window_title=None
         )
 
         assert launched, "Application failed to launch"

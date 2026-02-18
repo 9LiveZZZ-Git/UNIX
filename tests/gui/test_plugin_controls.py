@@ -2,12 +2,13 @@
 Plugin Controls GUI Tests
 
 Tests the plugin editor's controls:
-- Sliders (frequency, damping)
-- Buttons (pluck)
+- Parameter sliders
+- Note triggering
 - Virtual keyboard
 - Visual feedback
 
 Uses PyAutoGUI for automation.
+Synth-agnostic: works with any instrument plugin.
 """
 
 import time
@@ -114,12 +115,11 @@ class TestPluginControls:
     @pytest.mark.gui
     @pytest.mark.requires_standalone
     @pytest.mark.requires_display
-    def test_damping_slider(self, require_standalone, gui, screenshot_dir):
+    def test_parameter_slider(self, require_standalone, gui, screenshot_dir):
         """
-        Test damping slider interaction.
+        Test parameter slider interaction.
 
-        Drag slider and verify visual response via screenshot comparison.
-        The damping slider controls decay time of the Karplus-Strong algorithm.
+        Drag a slider and verify visual response via screenshot comparison.
         """
         if not HAS_PIL:
             pytest.skip("PIL/Pillow required for screenshot comparison")
@@ -142,13 +142,9 @@ class TestPluginControls:
                 pytest.skip("Failed to capture screenshot")
 
             # Save for debugging
-            screenshot_before.save(str(screenshot_dir / "damping_before.png"))
+            screenshot_before.save(str(screenshot_dir / "slider_before.png"))
 
-            # Damping slider is typically in the upper-right area of plugin UIs
-            # Use relative positioning based on window coordinates
-            # Typical JUCE slider: drag vertically or horizontally
-
-            # Try to drag in the damping area (right side of window, upper half)
+            # Try to drag a slider in the right side of the window
             # Using relative coordinates: (0.7, 0.3) to (0.7, 0.6)
             if gui.window:
                 slider_x = gui.window.x + int(0.75 * gui.window.width)
@@ -164,7 +160,7 @@ class TestPluginControls:
             if screenshot_after is None:
                 pytest.skip("Failed to capture screenshot after interaction")
 
-            screenshot_after.save(str(screenshot_dir / "damping_after.png"))
+            screenshot_after.save(str(screenshot_dir / "slider_after.png"))
 
             # Calculate difference - UI should have changed
             diff_percent = calculate_image_difference(screenshot_before, screenshot_after)
@@ -189,11 +185,11 @@ class TestPluginControls:
     @pytest.mark.gui
     @pytest.mark.requires_standalone
     @pytest.mark.requires_display
-    def test_pluck_button(self, require_standalone, gui, screenshot_dir, dawdreamer_available, require_vst3):
+    def test_trigger_note(self, require_standalone, gui, screenshot_dir, dawdreamer_available, require_vst3):
         """
-        Test pluck button triggers sound.
+        Test clicking the UI triggers sound.
 
-        Click pluck button and verify audio output using DawDreamer
+        Click in the plugin UI and verify audio output using DawDreamer
         or visual waveform change.
         """
         if not HAS_PIL:
@@ -210,13 +206,12 @@ class TestPluginControls:
             gui.focus_window()
             time.sleep(0.5)
 
-            # Take screenshot before clicking pluck
+            # Take screenshot before clicking
             screenshot_before = gui.screenshot()
             if screenshot_before:
-                screenshot_before.save(str(screenshot_dir / "pluck_before.png"))
+                screenshot_before.save(str(screenshot_dir / "trigger_before.png"))
 
-            # Pluck button is typically prominently placed
-            # Try clicking in the center-left area where trigger buttons often are
+            # Try clicking in common UI areas to trigger a note
             if gui.window:
                 # Try multiple potential button locations
                 button_locations = [
@@ -235,16 +230,16 @@ class TestPluginControls:
             # Take screenshot after clicking
             screenshot_after = gui.screenshot()
             if screenshot_after:
-                screenshot_after.save(str(screenshot_dir / "pluck_after.png"))
+                screenshot_after.save(str(screenshot_dir / "trigger_after.png"))
 
             # Check for visual change (waveform display should animate)
             if screenshot_before and screenshot_after:
                 diff_percent = calculate_image_difference(screenshot_before, screenshot_after)
-                print(f"\nPluck button test results:")
+                print(f"\nTrigger note test results:")
                 print(f"  Visual difference: {diff_percent:.2f}%")
 
             # Verify app stability
-            assert gui.process.poll() is None, "Application crashed during pluck button test"
+            assert gui.process.poll() is None, "Application crashed during trigger note test"
 
             # Audio verification via DawDreamer (if available)
             if dawdreamer_available and require_vst3:
@@ -253,7 +248,7 @@ class TestPluginControls:
 
                     host = DawDreamerHost(sample_rate=48000)
                     if host.load_plugin(require_vst3):
-                        # Simulate a pluck by sending a note
+                        # Send a note to verify audio output
                         result = host.render_note(note=60, velocity=100, duration_seconds=0.1, tail_seconds=1.0)
 
                         has_audio = audio_has_signal(result.audio)

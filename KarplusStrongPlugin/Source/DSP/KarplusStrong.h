@@ -149,7 +149,7 @@ public:
         // Apply velocity curve
         float scaledAmplitude = applyVelocityCurve(amplitude);
 
-        int maxDelay = static_cast<int>(baseDelayLength_) + 10;
+        int maxDelay = static_cast<int>(baseDelayLength_) + 100;
         if (maxDelay < 20) maxDelay = 20;
         delay_.resize(maxDelay);
         delay_.clear();

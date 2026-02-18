@@ -2,6 +2,7 @@
 Real Audio Quality Tests (using DawDreamer)
 
 Actual audio quality measurements using the loaded plugin.
+Synth-agnostic: works with any instrument plugin.
 """
 
 import numpy as np
@@ -82,9 +83,7 @@ class TestRealAudioQuality:
     @pytest.mark.requires_plugin
     def test_decay_to_silence(self, loaded_plugin: DawDreamerHost):
         """
-        Verify note decays to silence.
-
-        Karplus-Strong should naturally decay.
+        Verify note decays to silence after note-off.
         """
         result = loaded_plugin.render_note(
             note=60,
@@ -172,11 +171,11 @@ class TestSpectralQuality:
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin
-    def test_harmonic_structure(self, loaded_plugin: DawDreamerHost):
+    def test_spectral_content(self, loaded_plugin: DawDreamerHost):
         """
-        Verify Karplus-Strong harmonic structure.
+        Verify the plugin produces spectral content at the fundamental frequency.
 
-        Should have decaying harmonics (lowpass characteristic).
+        A pitched note should have significant energy at its fundamental.
         """
         result = loaded_plugin.render_note(
             note=60,  # C4 ~261 Hz
@@ -185,7 +184,7 @@ class TestSpectralQuality:
             tail_seconds=0.5
         )
 
-        # Analyze early in note (rich harmonics)
+        # Analyze early in note
         start = int(0.05 * result.sample_rate)
         end = int(0.15 * result.sample_rate)
         audio = result.audio[0, start:end]
@@ -200,8 +199,8 @@ class TestSpectralQuality:
         fundamental_freq = 261.63  # C4
         fund_idx = np.argmin(np.abs(freqs - fundamental_freq))
 
-        # Check first 5 harmonics
-        print(f"\nHarmonic structure:")
+        # Report spectral content (informational)
+        print(f"\nSpectral content:")
         harmonics = []
         for n in range(1, 6):
             harmonic_freq = fundamental_freq * n
@@ -212,13 +211,10 @@ class TestSpectralQuality:
             harmonics.append((n, harmonic_freq, harm_db))
             print(f"  Harmonic {n} ({harmonic_freq:.0f} Hz): {harm_db:.1f} dB")
 
-        # Verify harmonics are present (Karplus-Strong has rich harmonics)
-        # Note: During attack, higher harmonics can be stronger than fundamental
-        # We just verify multiple harmonics exist with significant energy
-        if len(harmonics) >= 3:
-            # Check that harmonics have energy (not silent)
-            for n, freq, db in harmonics[:3]:
-                assert db > 0, f"Harmonic {n} ({freq:.0f} Hz) has no energy"
+        # Verify fundamental has energy (this is universal for any pitched synth)
+        if len(harmonics) >= 1:
+            n, freq, db = harmonics[0]
+            assert db > 0, f"Fundamental ({freq:.0f} Hz) has no energy"
 
     @pytest.mark.audio
     @pytest.mark.requires_plugin

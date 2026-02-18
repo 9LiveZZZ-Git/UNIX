@@ -2,6 +2,7 @@
 Real Polyphony Tests (using DawDreamer)
 
 Actual tests that load the plugin and verify polyphony behavior.
+Synth-agnostic: works with any instrument plugin.
 """
 
 import numpy as np
@@ -181,7 +182,6 @@ class TestRealPolyphony:
             print(f"  Velocity {vel:3d}: RMS = {rms:.4f}")
 
         # Verify general trend: max velocity should be louder than min
-        # Note: Karplus-Strong with random noise can have some variation
         assert results[-1][1] > results[0][1] * 2, \
             f"Max velocity should be significantly louder than min: {results[-1][1]:.4f} vs {results[0][1]:.4f}"
 

@@ -182,7 +182,16 @@ class DawDreamerHost:
 
         try:
             if isinstance(name_or_index, str):
-                self.plugin.set_parameter_by_name(name_or_index, value)
+                # Look up parameter index by name
+                for i in range(200):
+                    try:
+                        if self.plugin.get_parameter_name(i) == name_or_index:
+                            self.plugin.set_parameter(i, value)
+                            return True
+                    except (IndexError, RuntimeError):
+                        break
+                print(f"Parameter not found: {name_or_index}")
+                return False
             else:
                 self.plugin.set_parameter(name_or_index, value)
             return True
