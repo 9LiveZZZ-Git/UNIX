@@ -57,6 +57,69 @@ void SDFLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width
     g.setColour(colour);
     g.strokePath(valueArc, juce::PathStrokeType(1.5f));
 
+    // Mod depth arc overlay + live indicator
+    {
+        auto modDepthVar = slider.getProperties()["modDepth"];
+        float md = modDepthVar.isVoid() ? 0.f : static_cast<float>(modDepthVar);
+        if (md != 0.f)
+        {
+            float modAngle = angle + md * (rotaryEndAngle - rotaryStartAngle);
+            modAngle = std::clamp(modAngle, rotaryStartAngle, rotaryEndAngle);
+            float modRadius = radius + 3.f;
+
+            // Range arc (shows full mod range, dimmer)
+            juce::Path modArc;
+            float arcStart = std::min(angle, modAngle);
+            float arcEnd = std::max(angle, modAngle);
+            modArc.addCentredArc(centreX, centreY, modRadius, modRadius,
+                                 0.f, arcStart, arcEnd, true);
+
+            auto modColour = md > 0.f ? juce::Colour(0xFFFF6432) : juce::Colour(0xFFFF3264);
+            g.setColour(modColour.withAlpha(0.12f));
+            g.strokePath(modArc, juce::PathStrokeType(5.f));
+            g.setColour(modColour.withAlpha(0.5f));
+            g.strokePath(modArc, juce::PathStrokeType(2.f));
+
+            // Live modulation indicator (animated dot at current modulated position)
+            auto liveVar = slider.getProperties()["modLiveOffset"];
+            float liveOff = liveVar.isVoid() ? 0.f : static_cast<float>(liveVar);
+            if (std::abs(liveOff) > 0.001f)
+            {
+                float liveAngle = angle + liveOff * (rotaryEndAngle - rotaryStartAngle);
+                liveAngle = std::clamp(liveAngle, rotaryStartAngle, rotaryEndAngle);
+
+                // Filled arc from base to live position
+                juce::Path liveArc;
+                float la0 = std::min(angle, liveAngle);
+                float la1 = std::max(angle, liveAngle);
+                liveArc.addCentredArc(centreX, centreY, modRadius, modRadius,
+                                      0.f, la0, la1, true);
+                g.setColour(modColour.withAlpha(0.7f));
+                g.strokePath(liveArc, juce::PathStrokeType(3.f));
+
+                // Bright dot at live position
+                float dotX = centreX + modRadius * std::cos(liveAngle - juce::MathConstants<float>::halfPi);
+                float dotY = centreY + modRadius * std::sin(liveAngle - juce::MathConstants<float>::halfPi);
+                g.setColour(modColour.withAlpha(0.3f));
+                g.fillEllipse(dotX - 4.5f, dotY - 4.5f, 9.f, 9.f);
+                g.setColour(modColour);
+                g.fillEllipse(dotX - 2.5f, dotY - 2.5f, 5.f, 5.f);
+            }
+        }
+    }
+
+    // Mod drag highlight background
+    {
+        auto highlightVar = slider.getProperties()["modDragHighlight"];
+        bool highlighted = highlightVar.isVoid() ? false : static_cast<bool>(highlightVar);
+        if (highlighted)
+        {
+            g.setColour(juce::Colour(0xFFFF6432).withAlpha(0.12f));
+            g.fillEllipse(centreX - radius - 4.f, centreY - radius - 4.f,
+                          (radius + 4.f) * 2.f, (radius + 4.f) * 2.f);
+        }
+    }
+
     // Hover glow: brighten arc when mouse is over the slider
     if (slider.isMouseOverOrDragging())
     {

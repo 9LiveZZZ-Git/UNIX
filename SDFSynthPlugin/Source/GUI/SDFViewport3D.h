@@ -4,6 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Texture/TextureSystem.h"
 #include "GUI/SkyboxSystem.h"
+#include <functional>
 
 class SDFViewport3D : public juce::Component,
                        public juce::OpenGLRenderer,
@@ -35,6 +36,9 @@ public:
     TextureSystem textureSystem;
     SkyboxSystem skyboxSystem;
     juce::OpenGLContext& getOpenGLContext() { return openGLContext; }
+
+    // Modulation callback — returns modulated param value (set by editor)
+    std::function<float(const char*)> getModulatedValue;
 
 private:
     juce::OpenGLContext openGLContext;

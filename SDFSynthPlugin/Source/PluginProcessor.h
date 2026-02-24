@@ -11,6 +11,14 @@
 #include "Utility/ThreadSafeSwap.h"
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <vector>
+
+struct ModRoute
+{
+    juce::String targetParamId;
+    float depth = 0.f; // bipolar -1..+1
+};
 
 class SDFSynthProcessor : public juce::AudioProcessor,
                            public juce::AudioProcessorValueTreeState::Listener
@@ -47,6 +55,9 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Keyboard state — shared with editor's MidiKeyboardComponent
+    juce::MidiKeyboardState keyboardState;
+
     // Expose for GUI
     const WavetableGenerator::Wavetable& getCurrentWavetable() const { return currentWavetable; }
     const std::vector<ContourPoint>& getCurrentContour() const { return currentContour; }
@@ -56,6 +67,22 @@ public:
     // Texture system reference (set by editor, used for audio modulation)
     void setTextureSystem(TextureSystem* ts) { texSystem = ts; }
     void markWavetableDirty() { wavetableDirty.store(true); }
+
+    // Modulation routing
+    void addModRoute(const juce::String& targetParamId, float depth);
+    void removeModRoute(const juce::String& targetParamId);
+    void setModDepth(const juce::String& targetParamId, float depth);
+    std::vector<ModRoute> getModRoutes() const;
+    float getLastEnvelopeValue() const { return lastEnvValue.load(); }
+    float getModulatedParamValue(const juce::String& paramId) const;
+    static std::vector<juce::String> getModulatableParamIds()
+    {
+        return { "size1", "size2", "offsetX", "offsetY", "smoothK", "twist",
+                 "scanRadius", "scanHeight", "topoMorph", "distScale",
+                 "filterCutoff", "filterRes",
+                 "attack", "decay", "sustain", "release",
+                 "masterGain" };
+    }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -95,6 +122,11 @@ private:
     // ADAA tanh state (per channel)
     float adaaPrevX[2] = { 0.f, 0.f };
     float adaaPrevF[2] = { 0.f, 0.f };
+
+    // Modulation routing
+    std::vector<ModRoute> modRoutes;
+    mutable std::mutex modRouteMutex;
+    std::atomic<float> lastEnvValue{ 0.f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SDFSynthProcessor)
 };

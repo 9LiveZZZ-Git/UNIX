@@ -20,21 +20,28 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
       distScaleKnob(p.apvts, "distScale", "Scale", SDFLookAndFeel::secondaryAccent),
       filterCutKnob(p.apvts, "filterCutoff", "Filter", SDFLookAndFeel::tertiaryAccent),
       filterResKnob(p.apvts, "filterRes", "Reson", SDFLookAndFeel::tertiaryAccent),
-      attackKnob(p.apvts, "attack", "Attack", SDFLookAndFeel::tertiaryAccent),
-      decayKnob(p.apvts, "decay", "Decay", SDFLookAndFeel::tertiaryAccent),
-      sustainKnob(p.apvts, "sustain", "Sustain", SDFLookAndFeel::tertiaryAccent),
-      releaseKnob(p.apvts, "release", "Release", SDFLookAndFeel::tertiaryAccent),
+      attackKnob(p.apvts, "attack", "Atk", SDFLookAndFeel::tertiaryAccent),
+      decayKnob(p.apvts, "decay", "Dec", SDFLookAndFeel::tertiaryAccent),
+      sustainKnob(p.apvts, "sustain", "Sus", SDFLookAndFeel::tertiaryAccent),
+      releaseKnob(p.apvts, "release", "Rel", SDFLookAndFeel::tertiaryAccent),
       gainKnob(p.apvts, "masterGain", "Volume", SDFLookAndFeel::tertiaryAccent),
+      adsrDisplay(p.apvts),
       skyExpKnob(p.apvts, "skyboxExposure", "Expose", SDFLookAndFeel::primaryAccent),
       skyRotKnob(p.apvts, "skyboxRotation", "Rotate", SDFLookAndFeel::primaryAccent),
       skyReflKnob(p.apvts, "skyboxReflect", "Reflect", SDFLookAndFeel::primaryAccent),
-      skyBlurKnob(p.apvts, "skyboxBlur", "Blur", SDFLookAndFeel::primaryAccent)
+      skyBlurKnob(p.apvts, "skyboxBlur", "Blur", SDFLookAndFeel::primaryAccent),
+      midiKeyboard(p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     setLookAndFeel(&lookAndFeel);
 
     // Wire texture system to processor for audio modulation
     processor.setTextureSystem(&viewport3D.textureSystem);
     textureMenu.onTextureChanged = [this]() { processor.markWavetableDirty(); };
+
+    // Wire modulated param values to viewport for live visualization
+    viewport3D.getModulatedValue = [this](const char* paramId) -> float {
+        return processor.getModulatedParamValue(juce::String(paramId));
+    };
 
     // Preset controls
     auto factoryNames = PresetManager::getFactoryPresetNames();
@@ -117,6 +124,7 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
     addAndMakeVisible(sustainKnob);
     addAndMakeVisible(releaseKnob);
     addAndMakeVisible(gainKnob);
+    addAndMakeVisible(adsrDisplay);
     addAndMakeVisible(waveformScope);
 
     setupSkyboxSelector();
@@ -135,15 +143,41 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
     distScaleKnob.setTooltipText("Distance-to-amplitude scaling factor");
     filterCutKnob.setTooltipText("Filter cutoff frequency (Hz)");
     filterResKnob.setTooltipText("Filter resonance amount");
-    attackKnob.setTooltipText("ADSR attack time (seconds)");
-    decayKnob.setTooltipText("ADSR decay time (seconds)");
-    sustainKnob.setTooltipText("ADSR sustain level (0-1)");
-    releaseKnob.setTooltipText("ADSR release time (seconds)");
+    attackKnob.setTooltipText("ADSR attack time");
+    decayKnob.setTooltipText("ADSR decay time");
+    sustainKnob.setTooltipText("ADSR sustain level");
+    releaseKnob.setTooltipText("ADSR release time");
     gainKnob.setTooltipText("Master output volume");
     skyExpKnob.setTooltipText("Skybox exposure brightness");
     skyRotKnob.setTooltipText("Skybox rotation angle");
     skyReflKnob.setTooltipText("Surface reflection intensity");
     skyBlurKnob.setTooltipText("Skybox blur amount");
+
+    // Collapsible MIDI keyboard — dark teal theme, C0-C7 range
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF0E1A1A));
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF060E0E));
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, SDFLookAndFeel::borderColour.withAlpha(0.6f));
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, SDFLookAndFeel::tertiaryAccent.withAlpha(0.3f));
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, SDFLookAndFeel::tertiaryAccent.withAlpha(0.6f));
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::textLabelColourId, SDFLookAndFeel::mutedText);
+    midiKeyboard.setColour(juce::MidiKeyboardComponent::shadowColourId, juce::Colour(0x40000000));
+    midiKeyboard.setAvailableRange(12, 96); // C0 to C7
+    midiKeyboard.setLowestVisibleKey(48); // C3 centered on startup
+    addChildComponent(midiKeyboard); // starts hidden
+
+    keyboardToggle.setColour(juce::TextButton::buttonColourId, SDFLookAndFeel::panelBg);
+    keyboardToggle.setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::mutedText);
+    keyboardToggle.onClick = [this]()
+    {
+        keyboardVisible = !keyboardVisible;
+        midiKeyboard.setVisible(keyboardVisible);
+        keyboardToggle.setColour(juce::TextButton::textColourOffId,
+            keyboardVisible ? SDFLookAndFeel::primaryAccent : SDFLookAndFeel::mutedText);
+        resized();
+    };
+    addAndMakeVisible(keyboardToggle);
+
+    setupModRouting();
 
     // IMPORTANT: setSize must be LAST — it triggers resized() which needs all children ready
     setResizable(true, true);
@@ -395,6 +429,23 @@ void SDFSynthEditor::timerCallback()
         lastVoiceCount = voiceCount;
         repaint(voiceMeterBounds);
     }
+
+    // Update live modulation visualization on knobs
+    {
+        float envValue = processor.getLastEnvelopeValue();
+        for (auto* knob : modTargetKnobs)
+        {
+            float md = knob->getModDepth();
+            if (md != 0.f)
+                knob->setModLiveOffset(envValue * md);
+            else
+                knob->setModLiveOffset(0.f);
+        }
+    }
+
+    // Repaint during mod drag for wire animation
+    if (adsrDisplay.isModDragActive())
+        repaint();
 }
 
 void SDFSynthEditor::paint(juce::Graphics& g)
@@ -473,6 +524,24 @@ void SDFSynthEditor::paint(juce::Graphics& g)
     SDFLookAndFeel::drawPanel(g, scenePanelBounds, "SCENE", SDFLookAndFeel::primaryAccent);
     SDFLookAndFeel::drawPanel(g, scanPanelBounds, "SCAN", SDFLookAndFeel::secondaryAccent);
     SDFLookAndFeel::drawPanel(g, filterEnvPanelBounds, "FILTER & ENVELOPE", SDFLookAndFeel::tertiaryAccent);
+
+    // Mod drag wire
+    if (adsrDisplay.isModDragActive())
+    {
+        auto handleCentre = adsrDisplay.getModHandleCentre();
+        auto start = adsrDisplay.localPointToGlobal(handleCentre);
+        start = getLocalPoint(nullptr, start);
+        auto end = adsrDisplay.getModDragPos();
+
+        juce::Path wire;
+        wire.startNewSubPath(start.toFloat());
+        float midY = (start.y + end.y) * 0.5f;
+        wire.cubicTo(static_cast<float>(start.x), midY,
+                     static_cast<float>(end.x), midY,
+                     static_cast<float>(end.x), static_cast<float>(end.y));
+        g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.7f));
+        g.strokePath(wire, juce::PathStrokeType(2.f));
+    }
 }
 
 void SDFSynthEditor::resized()
@@ -489,6 +558,10 @@ void SDFSynthEditor::resized()
         auto hdr = bounds.removeFromTop(hdrH);
         hdr.removeFromLeft(190); // after title text
 
+        // KB toggle button
+        keyboardToggle.setBounds(hdr.removeFromLeft(32).reduced(2, 4));
+        hdr.removeFromLeft(4);
+
         // Voice meter: 16 LEDs * (4+2) = 96px + 14px label = 110px
         auto voiceArea = hdr.removeFromLeft(124).reduced(4, 8);
         voiceMeterBounds = voiceArea;
@@ -503,6 +576,11 @@ void SDFSynthEditor::resized()
     }
 
     auto contentArea = bounds;
+
+    // Collapsible keyboard at bottom
+    if (keyboardVisible)
+        midiKeyboard.setBounds(contentArea.removeFromBottom(kKeyboardHeight));
+
     int contentH = contentArea.getHeight();
 
     // Two-column split
@@ -564,10 +642,10 @@ void SDFSynthEditor::resized()
     auto rc = rightCol.reduced(margin, margin);
     int rcH = rc.getHeight();
 
-    // Panel height proportions: Shape 14%, Scene 26%, Scan 30%, FilterEnv rest
-    int shapeH   = static_cast<int>(rcH * 0.14f);
-    int sceneH   = static_cast<int>(rcH * 0.26f);
-    int scanH    = static_cast<int>(rcH * 0.30f);
+    // Panel height proportions: Shape 13%, Scene 23%, Scan 27%, FilterEnv rest (~37%)
+    int shapeH   = static_cast<int>(rcH * 0.13f);
+    int sceneH   = static_cast<int>(rcH * 0.23f);
+    int scanH    = static_cast<int>(rcH * 0.27f);
 
     // --- SHAPE PANEL ---
     shapePanelBounds = rc.removeFromTop(shapeH);
@@ -661,27 +739,138 @@ void SDFSynthEditor::resized()
         // Row 0: Filter mode selector (narrow row)
         auto fmRow = inner.removeFromTop(20);
         filterModeSelector.setBounds(fmRow);
-        inner.removeFromTop(4);
+        inner.removeFromTop(3);
 
-        // Row 1: Filter cutoff + resonance (2 knobs)
-        int knobW = inner.getWidth() / 2;
-        int rowH = inner.getHeight() / 3;
+        // Row 1: Filter cut + res + volume (3 knobs)
+        int knobW3 = inner.getWidth() / 3;
+        int knobRowH = juce::jmin(static_cast<int>(inner.getHeight() * 0.30f), 65);
+        auto knobRow = inner.removeFromTop(knobRowH);
+        filterCutKnob.setBounds(knobRow.removeFromLeft(knobW3));
+        filterResKnob.setBounds(knobRow.removeFromLeft(knobW3));
+        gainKnob.setBounds(knobRow);
 
-        auto r1 = inner.removeFromTop(rowH);
-        filterCutKnob.setBounds(r1.removeFromLeft(knobW));
-        filterResKnob.setBounds(r1);
+        inner.removeFromTop(2);
 
-        // Row 2: ADSR (4 knobs in a row)
-        int adsrW = inner.getWidth() / 4;
-        auto r2 = inner.removeFromTop(rowH);
-        attackKnob.setBounds(r2.removeFromLeft(adsrW));
-        decayKnob.setBounds(r2.removeFromLeft(adsrW));
-        sustainKnob.setBounds(r2.removeFromLeft(adsrW));
-        releaseKnob.setBounds(r2);
+        // Row 2: ADSR knobs (4 across) + graphic display side-by-side
+        // Left half: 4 ADSR knobs in 2x2 grid
+        // Right half: graphic ADSR display
+        int adsrKnobW = inner.getWidth() / 2;
+        auto adsrKnobArea = inner.removeFromLeft(adsrKnobW);
+        auto adsrDisplayArea = inner;
 
-        // Row 3: Volume
-        auto r3 = inner;
-        int volW = juce::jmin(knobW, r3.getWidth());
-        gainKnob.setBounds(r3.removeFromLeft(volW));
+        // 2x2 grid for ADSR knobs
+        int akW = adsrKnobArea.getWidth() / 2;
+        int akH = adsrKnobArea.getHeight() / 2;
+        auto akR1 = adsrKnobArea.removeFromTop(akH);
+        attackKnob.setBounds(akR1.removeFromLeft(akW));
+        decayKnob.setBounds(akR1);
+        auto akR2 = adsrKnobArea;
+        sustainKnob.setBounds(akR2.removeFromLeft(akW));
+        releaseKnob.setBounds(akR2);
+
+        // Graphic ADSR display
+        adsrDisplay.setBounds(adsrDisplayArea);
     }
+}
+
+void SDFSynthEditor::setupModRouting()
+{
+    // All non-visual knobs are mod targets: scene + scan + filter/env
+    modTargetKnobs = {
+        // Scene
+        &sizeAKnob, &sizeBKnob, &offsetXKnob, &offsetYKnob, &smoothKKnob, &twistKnob,
+        // Scan
+        &scanRadiusKnob, &scanHeightKnob, &topoMorphKnob, &distScaleKnob,
+        // Filter & Envelope
+        &filterCutKnob, &filterResKnob,
+        &attackKnob, &decayKnob, &sustainKnob, &releaseKnob,
+        &gainKnob
+    };
+
+    for (auto* knob : modTargetKnobs)
+    {
+        knob->setModTargetEnabled(true);
+
+        knob->onModRouteRemoved = [this, knob]()
+        {
+            processor.removeModRoute(knob->getParameterID());
+            updateModDepthDisplays();
+        };
+
+        knob->onModDepthChanged = [this, knob](float newDepth)
+        {
+            processor.setModDepth(knob->getParameterID(), newDepth);
+            updateModDepthDisplays();
+        };
+    }
+
+    // ADSR Display mod drag callbacks
+    adsrDisplay.onModDragStarted = [this]()
+    {
+        currentModHighlight = nullptr;
+    };
+
+    adsrDisplay.onModDragging = [this](juce::Point<int> pos)
+    {
+        auto* knob = findKnobAt(pos);
+        if (knob != currentModHighlight)
+        {
+            if (currentModHighlight)
+                currentModHighlight->setModDragHighlight(false);
+            currentModHighlight = knob;
+            if (currentModHighlight)
+                currentModHighlight->setModDragHighlight(true);
+        }
+    };
+
+    adsrDisplay.onModDragEnded = [this](juce::Point<int> pos)
+    {
+        if (currentModHighlight)
+            currentModHighlight->setModDragHighlight(false);
+
+        auto* knob = findKnobAt(pos);
+        if (knob)
+        {
+            // Toggle: if already modulated, remove; otherwise add
+            if (knob->getModDepth() != 0.f)
+                processor.removeModRoute(knob->getParameterID());
+            else
+                processor.addModRoute(knob->getParameterID(), 0.5f);
+            updateModDepthDisplays();
+        }
+        currentModHighlight = nullptr;
+    };
+
+    // Initialize mod depth displays from existing routes
+    updateModDepthDisplays();
+}
+
+void SDFSynthEditor::updateModDepthDisplays()
+{
+    auto routes = processor.getModRoutes();
+
+    for (auto* knob : modTargetKnobs)
+    {
+        float depth = 0.f;
+        for (const auto& r : routes)
+        {
+            if (r.targetParamId == knob->getParameterID())
+            {
+                depth = r.depth;
+                break;
+            }
+        }
+        knob->setModDepth(depth);
+    }
+}
+
+ArcKnob* SDFSynthEditor::findKnobAt(juce::Point<int> pos)
+{
+    for (auto* knob : modTargetKnobs)
+    {
+        auto knobBounds = knob->getBoundsInParent();
+        if (knobBounds.contains(pos))
+            return knob;
+    }
+    return nullptr;
 }

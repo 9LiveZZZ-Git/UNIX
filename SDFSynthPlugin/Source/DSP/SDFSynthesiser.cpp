@@ -67,6 +67,20 @@ int SDFSynthesiser::getActiveVoiceCount() const
     return count;
 }
 
+float SDFSynthesiser::getMaxEnvelopeValue() const
+{
+    float maxEnv = 0.f;
+    for (int i = 0; i < getNumVoices(); ++i)
+    {
+        if (auto* voice = dynamic_cast<const SDFVoice*>(getVoice(i)))
+        {
+            if (voice->isVoiceActive())
+                maxEnv = std::max(maxEnv, voice->getCurrentEnvelopeValue());
+        }
+    }
+    return maxEnv;
+}
+
 juce::SynthesiserVoice* SDFSynthesiser::findVoiceToSteal(
     juce::SynthesiserSound* soundToPlay,
     int /*midiChannel*/, int midiNoteNumber) const

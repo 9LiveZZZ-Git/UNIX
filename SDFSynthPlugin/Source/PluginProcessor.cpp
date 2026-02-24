@@ -184,6 +184,9 @@ void SDFSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
+    // Merge GUI keyboard events into the MIDI stream
+    keyboardState.processNextMidiBuffer(midiMessages, 0, buffer.getNumSamples(), true);
+
     // Handle MIDI CC mappings before passing to synthesiser
     for (const auto metadata : midiMessages)
     {
@@ -215,21 +218,90 @@ void SDFSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         triggerBackgroundRebuild();
     }
 
-    // Update ADSR
-    synthesiser.updateADSR(
-        apvts.getRawParameterValue("attack")->load(),
-        apvts.getRawParameterValue("decay")->load(),
-        apvts.getRawParameterValue("sustain")->load(),
-        apvts.getRawParameterValue("release")->load());
+    // Read ADSR base values
+    float adsrA = apvts.getRawParameterValue("attack")->load();
+    float adsrD = apvts.getRawParameterValue("decay")->load();
+    float adsrS = apvts.getRawParameterValue("sustain")->load();
+    float adsrR = apvts.getRawParameterValue("release")->load();
 
     int numSamples = buffer.getNumSamples();
     int numChannels = buffer.getNumChannels();
 
+    // Use previous frame's envelope value for this block's modulation
+    float envValue = lastEnvValue.load();
+
+    // Apply modulation to ADSR before updating synthesiser
+    {
+        std::lock_guard<std::mutex> lock(modRouteMutex);
+        for (const auto& route : modRoutes)
+        {
+            auto* param = apvts.getParameter(route.targetParamId);
+            if (!param) continue;
+
+            // Only modulate ADSR params pre-render
+            if (route.targetParamId == "attack" ||
+                route.targetParamId == "decay" ||
+                route.targetParamId == "sustain" ||
+                route.targetParamId == "release")
+            {
+                float baseNorm = param->getValue();
+                float modNorm = std::clamp(baseNorm + envValue * route.depth, 0.f, 1.f);
+                float modVal = param->convertFrom0to1(modNorm);
+
+                if (route.targetParamId == "attack")  adsrA = modVal;
+                else if (route.targetParamId == "decay")   adsrD = modVal;
+                else if (route.targetParamId == "sustain") adsrS = modVal;
+                else if (route.targetParamId == "release") adsrR = modVal;
+            }
+        }
+    }
+
+    // Update ADSR (with modulated values)
+    synthesiser.updateADSR(adsrA, adsrD, adsrS, adsrR);
+
     synthesiser.renderNextBlock(buffer, midiMessages, 0, numSamples);
+
+    // Update envelope value for next frame's modulation + GUI
+    envValue = synthesiser.getMaxEnvelopeValue();
+    lastEnvValue.store(envValue);
 
     // SVF Filter — update target params (smoothing happens per-sample inside process())
     float cutoff = apvts.getRawParameterValue("filterCutoff")->load();
     float res = apvts.getRawParameterValue("filterRes")->load();
+    float gain = apvts.getRawParameterValue("masterGain")->load();
+
+    // Apply modulation routes (post-render params: filter, gain, scene/scan)
+    {
+        bool sceneDirty = false;
+        std::lock_guard<std::mutex> lock(modRouteMutex);
+        for (const auto& route : modRoutes)
+        {
+            // Skip ADSR — already handled above
+            if (route.targetParamId == "attack" || route.targetParamId == "decay" ||
+                route.targetParamId == "sustain" || route.targetParamId == "release")
+                continue;
+
+            auto* param = apvts.getParameter(route.targetParamId);
+            if (!param) continue;
+            float baseNorm = param->getValue();
+            float modNorm = std::clamp(baseNorm + envValue * route.depth, 0.f, 1.f);
+            float modVal = param->convertFrom0to1(modNorm);
+
+            if (route.targetParamId == "filterCutoff")
+                cutoff = modVal;
+            else if (route.targetParamId == "filterRes")
+                res = modVal;
+            else if (route.targetParamId == "masterGain")
+                gain = modVal;
+            else
+                sceneDirty = true; // scene/scan param modulated — mark dirty
+        }
+
+        // Scene/scan modulation triggers wavetable rebuild (rate-limited by rebuild thread)
+        if (sceneDirty && envValue > 0.01f)
+            wavetableDirty.store(true);
+    }
+
     if (cutoff != lastFilterCutoff || res != lastFilterRes)
     {
         filterL.setParams(cutoff, res, static_cast<float>(getSampleRate()));
@@ -261,7 +333,6 @@ void SDFSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     }
 
     // Apply master gain
-    float gain = apvts.getRawParameterValue("masterGain")->load();
     buffer.applyGain(gain);
 
     // ADAA tanh soft clipper (anti-aliased)
@@ -343,6 +414,32 @@ void SDFSynthProcessor::triggerBackgroundRebuild()
     const TextureSlot* dSlot = texSystem ? &texSystem->dispTex : nullptr;
     const TextureSlot* eSlot = texSystem ? &texSystem->emitTex : nullptr;
 
+    // Apply envelope modulation to scene/scan snapshot values
+    float envValue = lastEnvValue.load();
+    if (envValue > 0.001f)
+    {
+        std::lock_guard<std::mutex> lock(modRouteMutex);
+        for (const auto& route : modRoutes)
+        {
+            auto* param = apvts.getParameter(route.targetParamId);
+            if (!param) continue;
+            float baseNorm = param->getValue();
+            float modNorm = std::clamp(baseNorm + envValue * route.depth, 0.f, 1.f);
+            float modVal = param->convertFrom0to1(modNorm);
+
+            if (route.targetParamId == "size1")        snapScene.size1 = modVal;
+            else if (route.targetParamId == "size2")   snapScene.size2 = modVal;
+            else if (route.targetParamId == "offsetX") snapScene.offsetX = modVal;
+            else if (route.targetParamId == "offsetY") snapScene.offsetY = modVal;
+            else if (route.targetParamId == "smoothK") snapScene.smoothK = modVal;
+            else if (route.targetParamId == "twist")   snapScene.twist = modVal;
+            else if (route.targetParamId == "scanRadius") scanR = modVal;
+            else if (route.targetParamId == "scanHeight") scanH = modVal;
+            else if (route.targetParamId == "topoMorph")  topoM = modVal;
+            else if (route.targetParamId == "distScale")  distS = modVal;
+        }
+    }
+
     builderThread = std::thread([this, snapScene, mode, scanH, scanR, topoM, distS, dispA, emI, texS, dSlot, eSlot]()
     {
         // Use local copies for computation
@@ -397,10 +494,92 @@ void SDFSynthProcessor::rebuildWavetable()
     synthesiser.setMipMappedWavetable(mipTable);
 }
 
+void SDFSynthProcessor::addModRoute(const juce::String& targetParamId, float depth)
+{
+    std::lock_guard<std::mutex> lock(modRouteMutex);
+    for (auto& r : modRoutes)
+    {
+        if (r.targetParamId == targetParamId)
+        {
+            r.depth = depth;
+            return;
+        }
+    }
+    modRoutes.push_back({ targetParamId, depth });
+}
+
+void SDFSynthProcessor::removeModRoute(const juce::String& targetParamId)
+{
+    std::lock_guard<std::mutex> lock(modRouteMutex);
+    modRoutes.erase(
+        std::remove_if(modRoutes.begin(), modRoutes.end(),
+            [&](const ModRoute& r) { return r.targetParamId == targetParamId; }),
+        modRoutes.end());
+}
+
+void SDFSynthProcessor::setModDepth(const juce::String& targetParamId, float depth)
+{
+    std::lock_guard<std::mutex> lock(modRouteMutex);
+    for (auto& r : modRoutes)
+    {
+        if (r.targetParamId == targetParamId)
+        {
+            r.depth = depth;
+            return;
+        }
+    }
+}
+
+std::vector<ModRoute> SDFSynthProcessor::getModRoutes() const
+{
+    std::lock_guard<std::mutex> lock(modRouteMutex);
+    return modRoutes;
+}
+
+float SDFSynthProcessor::getModulatedParamValue(const juce::String& paramId) const
+{
+    auto* param = apvts.getParameter(paramId);
+    if (!param) return apvts.getRawParameterValue(paramId)->load();
+
+    float baseNorm = param->getValue();
+    float envValue = lastEnvValue.load();
+
+    if (envValue > 0.001f)
+    {
+        std::lock_guard<std::mutex> lock(modRouteMutex);
+        for (const auto& route : modRoutes)
+        {
+            if (route.targetParamId == paramId)
+            {
+                float modNorm = std::clamp(baseNorm + envValue * route.depth, 0.f, 1.f);
+                return param->convertFrom0to1(modNorm);
+            }
+        }
+    }
+
+    return param->convertFrom0to1(baseNorm);
+}
+
 void SDFSynthProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
+
+    // Serialize mod routes
+    {
+        std::lock_guard<std::mutex> lock(modRouteMutex);
+        if (!modRoutes.empty())
+        {
+            auto* routesXml = xml->createNewChildElement("ModRoutes");
+            for (const auto& r : modRoutes)
+            {
+                auto* routeXml = routesXml->createNewChildElement("Route");
+                routeXml->setAttribute("target", r.targetParamId);
+                routeXml->setAttribute("depth", static_cast<double>(r.depth));
+            }
+        }
+    }
+
     copyXmlToBinary(*xml, destData);
 }
 
@@ -409,6 +588,26 @@ void SDFSynthProcessor::setStateInformation(const void* data, int sizeInBytes)
     std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
     if (xml && xml->hasTagName(apvts.state.getType()))
     {
+        // Deserialize mod routes before replacing state
+        {
+            std::lock_guard<std::mutex> lock(modRouteMutex);
+            modRoutes.clear();
+            if (auto* routesXml = xml->getChildByName("ModRoutes"))
+            {
+                for (auto* routeXml : routesXml->getChildIterator())
+                {
+                    if (routeXml->hasTagName("Route"))
+                    {
+                        ModRoute r;
+                        r.targetParamId = routeXml->getStringAttribute("target");
+                        r.depth = static_cast<float>(routeXml->getDoubleAttribute("depth"));
+                        modRoutes.push_back(r);
+                    }
+                }
+                xml->removeChildElement(routesXml, true);
+            }
+        }
+
         apvts.replaceState(juce::ValueTree::fromXml(*xml));
         wavetableDirty.store(true);
     }

@@ -49,6 +49,7 @@ void SDFVoice::renderNextBlock(juce::AudioBuffer<float>& buffer, int startSample
     {
         float sample = oscillator.nextSample();
         float env = adsr.getNextSample();
+        lastEnvelopeValue = env;
         float output = sample * env * velocityGain;
 
         if (stealing)

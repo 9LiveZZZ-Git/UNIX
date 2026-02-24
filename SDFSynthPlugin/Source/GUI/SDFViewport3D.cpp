@@ -135,7 +135,11 @@ void SDFViewport3D::renderOpenGL()
     };
     auto setFloat = [&](const char* name, const char* paramId) {
         if (auto u = shader->getUniformIDFromName(name))
-            juce::gl::glUniform1f(u, apvts.getRawParameterValue(paramId)->load());
+        {
+            float val = getModulatedValue ? getModulatedValue(paramId)
+                                          : apvts.getRawParameterValue(paramId)->load();
+            juce::gl::glUniform1f(u, val);
+        }
     };
 
     setInt("uS1", "shape1");

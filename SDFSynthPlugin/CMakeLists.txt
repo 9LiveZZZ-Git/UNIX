@@ -76,6 +76,7 @@ target_sources(SDFSynthPlugin
         Source/DSP/SDFSynthesiser.cpp
         Source/GUI/SDFLookAndFeel.cpp
         Source/GUI/ArcKnob.cpp
+        Source/GUI/ADSRDisplay.cpp
         Source/GUI/ShapeSelector.cpp
         Source/GUI/WaveformScope.cpp
         Source/GUI/SDFViewport3D.cpp

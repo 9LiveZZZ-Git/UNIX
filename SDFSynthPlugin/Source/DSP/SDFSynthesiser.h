@@ -14,6 +14,7 @@ public:
     void updateADSR(float a, float d, float s, float r);
     float getActivePhase() const;
     int getActiveVoiceCount() const;
+    float getMaxEnvelopeValue() const;
     const MipMappedWavetable& getCurrentMipTable() const { return currentMipTable; }
 
 protected:

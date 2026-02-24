@@ -1,8 +1,10 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
 #include "GUI/SDFLookAndFeel.h"
 #include "GUI/ArcKnob.h"
+#include "GUI/ADSRDisplay.h"
 #include "GUI/ShapeSelector.h"
 #include "GUI/WaveformScope.h"
 #include "GUI/SDFViewport3D.h"
@@ -59,6 +61,9 @@ private:
     ArcKnob attackKnob, decayKnob, sustainKnob, releaseKnob;
     ArcKnob gainKnob;
 
+    // Graphic ADSR display (alongside ADSR knobs)
+    ADSRDisplay adsrDisplay;
+
     // Filter mode selector
     juce::ComboBox filterModeSelector;
 
@@ -72,6 +77,12 @@ private:
     juce::ComboBox skyboxSelector;
     ArcKnob skyExpKnob, skyRotKnob, skyReflKnob, skyBlurKnob;
     juce::TextButton skyLoadBtn{ "HDR" };
+
+    // Collapsible MIDI keyboard
+    juce::MidiKeyboardComponent midiKeyboard;
+    juce::TextButton keyboardToggle{ "KB" };
+    bool keyboardVisible = false;
+    static constexpr int kKeyboardHeight = 72;
 
     // Panel bounds (computed in resized(), drawn in paint())
     juce::Rectangle<int> shapePanelBounds;
@@ -87,6 +98,13 @@ private:
     void setupFilterModeSelector();
     void applyPresetResources();
     void updateScanKnobLabels(int mode);
+    void setupModRouting();
+    void updateModDepthDisplays();
+    ArcKnob* findKnobAt(juce::Point<int> pos);
+
+    // Mod routing drag state
+    std::vector<ArcKnob*> modTargetKnobs;
+    ArcKnob* currentModHighlight = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SDFSynthEditor)
 };

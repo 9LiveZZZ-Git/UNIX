@@ -35,6 +35,7 @@ public:
 
     bool isInRelease() const { return !noteActive && adsr.isActive(); }
     float getVelocityGain() const { return velocityGain; }
+    float getCurrentEnvelopeValue() const { return lastEnvelopeValue; }
 
 private:
     SDFOscillator oscillator;
@@ -45,6 +46,7 @@ private:
     float baseFrequency = 0.f;
     float pitchBendSemitones = 0.f;
     bool noteActive = false;
+    float lastEnvelopeValue = 0.f;
 
     // Voice stealing anti-click fade
     bool stealing = false;
