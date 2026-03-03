@@ -74,6 +74,7 @@ target_sources(SDFSynthPlugin
         Source/DSP/WavetableGenerator.cpp
         Source/DSP/SDFVoice.cpp
         Source/DSP/SDFSynthesiser.cpp
+        Source/DSP/MeshImporter.cpp
         Source/GUI/SDFLookAndFeel.cpp
         Source/GUI/ArcKnob.cpp
         Source/GUI/ADSRDisplay.cpp
@@ -168,6 +169,78 @@ target_link_libraries(SDFSynthPlugin
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
+)
+
+# =============================================================================
+# Unit Test Target
+# =============================================================================
+juce_add_console_app(SDFSynthTests
+    PRODUCT_NAME "SDF Synth Tests"
+)
+
+target_sources(SDFSynthTests
+    PRIVATE
+        Tests/TestMain.cpp
+        Tests/TestSVFFilter.cpp
+        Tests/TestSDFOscillator.cpp
+        Tests/TestWavetableGenerator.cpp
+        Tests/TestContourExtractor.cpp
+        Tests/TestThreadSafeSwap.cpp
+        Tests/TestNoiseGenerator.cpp
+        Tests/TestOscEffects.cpp
+        Tests/TestOscB.cpp
+        Tests/TestUnison.cpp
+        Tests/TestFilterModes.cpp
+        Tests/TestPhase2Integration.cpp
+        Tests/TestPresetData.cpp
+        Tests/TestVoxelSDF.cpp
+        Tests/TestMeshImporter.cpp
+        Tests/TestLFO.cpp
+        Tests/TestModulationMatrix.cpp
+        Tests/TestFXChain.cpp
+        Tests/TestClickDetection.cpp
+        Source/DSP/SDFScene3D.cpp
+        Source/DSP/ContourExtractor.cpp
+        Source/DSP/WavetableGenerator.cpp
+        Source/DSP/SDFVoice.cpp
+        Source/DSP/SDFSynthesiser.cpp
+        Source/DSP/MeshImporter.cpp
+        Source/Utility/PresetManager.cpp
+        Source/Texture/ProceduralLibrary.cpp
+)
+
+target_include_directories(SDFSynthTests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/DSP
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/GUI
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Texture
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Utility
+)
+
+target_compile_definitions(SDFSynthTests
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+        JUCE_UNIT_TESTS=1
+)
+
+if(MSVC)
+    target_compile_options(SDFSynthTests PRIVATE /W4 /permissive- /Zc:__cplusplus /MP)
+    target_compile_definitions(SDFSynthTests PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(SDFSynthTests PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter)
+endif()
+
+target_link_libraries(SDFSynthTests
+    PRIVATE
+        juce::juce_core
+        juce::juce_audio_basics
+        juce::juce_audio_processors
+        juce::juce_graphics
+        juce::juce_dsp
 )
 
 # =============================================================================

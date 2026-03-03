@@ -5,6 +5,11 @@
 #include <cmath>
 #include <complex>
 
+// Forward declarations of post-processing helpers (defined below)
+static void removeDCAndNormalize(std::array<float, sdf::TABLE_SIZE>& table);
+static void smoothTable(std::array<float, sdf::TABLE_SIZE>& table);
+static void crossfadeLoopPoint(std::array<float, sdf::TABLE_SIZE>& table, int fadeLen);
+
 WavetableGenerator::Wavetable WavetableGenerator::generate(
     const SDFScene3D& scene,
     const std::vector<ContourPoint>& contour,
@@ -82,6 +87,11 @@ WavetableGenerator::Wavetable WavetableGenerator::generate(
             table[i] = std::clamp(s, -1.f, 1.f);
         }
     }
+
+    // Post-process: smooth SDF sampling noise, close loop point, normalize
+    crossfadeLoopPoint(table, 32);
+    smoothTable(table);
+    removeDCAndNormalize(table);
 
     return table;
 }
@@ -232,12 +242,12 @@ static void crossfadeLoopPoint(std::array<float, sdf::TABLE_SIZE>& table, int fa
     {
         float t = static_cast<float>(i) / fadeLen;
         float cosT = 0.5f * (1.f - std::cos(sdf::PI * t));
-        // Blend end region into start region
         int startIdx = i;
         int endIdx = n - fadeLen + i;
-        float blended = table[endIdx] * (1.f - cosT) + table[startIdx] * cosT;
-        table[startIdx] = blended;
-        table[endIdx] = table[endIdx] * cosT + table[startIdx] * (1.f - cosT);
+        float origStart = table[startIdx];
+        float origEnd = table[endIdx];
+        table[startIdx] = origEnd * (1.f - cosT) + origStart * cosT;
+        table[endIdx]   = origEnd * cosT + origStart * (1.f - cosT);
     }
 }
 

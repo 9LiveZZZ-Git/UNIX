@@ -7,11 +7,12 @@ ShapeSelector::ShapeSelector(juce::AudioProcessorValueTreeState& apvts,
     : paramId(pid), apvtsRef(apvts)
 {
     titleLabel.setText(label, juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), 8.f, 0));
+    titleLabel.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), SDFLookAndFeel::scaled(8.f), 0));
     titleLabel.setColour(juce::Label::textColourId, SDFLookAndFeel::mutedText);
     addAndMakeVisible(titleLabel);
 
-    juce::StringArray names = { "SPH", "BOX", "TOR", "CYL", "OCT", "OBJ" };
+    juce::StringArray names = { "SPH", "BOX", "TOR", "CYL", "OCT", "OBJ",
+                                "CAP", "RBOX", "HEX", "T82", "T88", "SF" };
     for (int i = 0; i < names.size(); ++i)
     {
         auto* btn = buttons.add(new juce::TextButton(names[i]));
@@ -55,10 +56,29 @@ void ShapeSelector::updateSelection(int index)
 void ShapeSelector::resized()
 {
     auto bounds = getLocalBounds();
-    titleLabel.setBounds(bounds.removeFromLeft(60));
+    titleLabel.setBounds(bounds.removeFromLeft(40));
 
     if (buttons.size() == 0) return;
-    auto btnWidth = bounds.getWidth() / buttons.size();
-    for (auto* btn : buttons)
-        btn->setBounds(bounds.removeFromLeft(btnWidth));
+
+    // 2 rows of 6 for 12 buttons, single row for <= 6
+    if (buttons.size() <= 6)
+    {
+        auto btnWidth = bounds.getWidth() / buttons.size();
+        for (auto* btn : buttons)
+            btn->setBounds(bounds.removeFromLeft(btnWidth));
+    }
+    else
+    {
+        int cols = 6;
+        int rowH = bounds.getHeight() / 2;
+        auto row1 = bounds.removeFromTop(rowH);
+        auto row2 = bounds;
+        int btnW = row1.getWidth() / cols;
+
+        for (int i = 0; i < buttons.size(); ++i)
+        {
+            auto& row = (i < cols) ? row1 : row2;
+            buttons[i]->setBounds(row.removeFromLeft(btnW));
+        }
+    }
 }

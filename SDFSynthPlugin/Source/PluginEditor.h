@@ -4,17 +4,22 @@
 #include "PluginProcessor.h"
 #include "GUI/SDFLookAndFeel.h"
 #include "GUI/ArcKnob.h"
-#include "GUI/ADSRDisplay.h"
-#include "GUI/ShapeSelector.h"
 #include "GUI/WaveformScope.h"
 #include "GUI/SDFViewport3D.h"
-#include "GUI/TextureMenu.h"
+#include "GUI/TabBar.h"
+#include "GUI/BottomStrip.h"
+#include "GUI/ShapeTab.h"
+#include "GUI/OscTab.h"
+#include "GUI/FXTab.h"
+#include "GUI/ModTab.h"
+#include "GUI/VisTab.h"
 #include "Utility/PresetManager.h"
 #include "Texture/ProceduralLibrary.h"
 
 class SDFSynthEditor : public juce::AudioProcessorEditor,
                         public juce::Timer,
-                        public juce::AudioProcessorValueTreeState::Listener
+                        public juce::AudioProcessorValueTreeState::Listener,
+                        public juce::FileDragAndDropTarget
 {
 public:
     explicit SDFSynthEditor(SDFSynthProcessor&);
@@ -25,86 +30,72 @@ public:
     void timerCallback() override;
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
 private:
     SDFSynthProcessor& processor;
     SDFLookAndFeel lookAndFeel;
     PresetManager presetManager;
-    juce::ComboBox presetSelector;
+
+    // Header bar
+    juce::TextButton presetBrowserBtn{ "-- Preset --" };
+    juce::TextButton initBtn{ "INIT" };
+    juce::TextButton abBtn{ "A" };
     juce::TextButton presetSaveBtn{ "SAVE" }, presetLoadBtn{ "LOAD" };
+    juce::ComboBox scaleSelector;
+    float currentScale = 1.0f;
+    void showPresetMenu();
+    void applyScale(float newScale);
 
-    // 3D Viewport
-    SDFViewport3D viewport3D;
+    // OBJ import
+    juce::TextButton objLoadBtn{ "OBJ" };
 
-    // Texture menu (must be after viewport3D for GL context access)
-    TextureMenu textureMenu;
-
-    // Shape selectors
-    ShapeSelector shapeASelector;
-    ShapeSelector shapeBSelector;
-
-    // Operation buttons
-    juce::OwnedArray<juce::TextButton> opButtons;
-
-    // Scan mode buttons
-    juce::OwnedArray<juce::TextButton> scanModeButtons;
-
-    // Knobs - Scene
-    ArcKnob sizeAKnob, sizeBKnob, offsetXKnob, offsetYKnob;
-    ArcKnob smoothKKnob, twistKnob;
-
-    // Knobs - Scan
-    ArcKnob scanRadiusKnob, scanHeightKnob, topoMorphKnob;
-
-    // Knobs - Scale/Audio
-    ArcKnob distScaleKnob;
-    ArcKnob filterCutKnob, filterResKnob;
-    ArcKnob attackKnob, decayKnob, sustainKnob, releaseKnob;
-    ArcKnob gainKnob;
-
-    // Graphic ADSR display (alongside ADSR knobs)
-    ADSRDisplay adsrDisplay;
-
-    // Filter mode selector
-    juce::ComboBox filterModeSelector;
-
-    // Waveform
-    WaveformScope waveformScope;
-
-    // Voice activity meter
-    int lastVoiceCount = 0;
-
-    // Skybox controls
-    juce::ComboBox skyboxSelector;
-    ArcKnob skyExpKnob, skyRotKnob, skyReflKnob, skyBlurKnob;
-    juce::TextButton skyLoadBtn{ "HDR" };
+    // Debug bypass buttons
+    juce::TextButton bypassOscBtn{ "MUTE" };
+    juce::TextButton bypassFXBtn{ "RAW" };
 
     // Collapsible MIDI keyboard
     juce::MidiKeyboardComponent midiKeyboard;
     juce::TextButton keyboardToggle{ "KB" };
     bool keyboardVisible = false;
-    static constexpr int kKeyboardHeight = 72;
 
-    // Panel bounds (computed in resized(), drawn in paint())
-    juce::Rectangle<int> shapePanelBounds;
-    juce::Rectangle<int> scenePanelBounds;
-    juce::Rectangle<int> scanPanelBounds;
-    juce::Rectangle<int> filterEnvPanelBounds;
-    juce::Rectangle<int> visualPanelBounds;
+    // 3D Viewport (persistent, left column)
+    SDFViewport3D viewport3D;
+
+    // Waveform scope (persistent, below viewport)
+    WaveformScope waveformScope;
+
+    // Tab bar + 5 tab panels (right column)
+    TabBar tabBar;
+    ShapeTab shapeTab;
+    OscTab oscTab;
+    FXTab fxTab;
+    ModTab modTab;
+    VisTab visTab;
+
+    // Bottom strip (persistent)
+    BottomStrip bottomStrip;
+
+    // Voice activity meter
+    int lastVoiceCount = 0;
     juce::Rectangle<int> voiceMeterBounds;
 
-    void setupOperationButtons();
-    void setupScanModeButtons();
-    void setupSkyboxSelector();
-    void setupFilterModeSelector();
+    // Tab switching
+    void switchTab(int tabIndex);
+
+    // Presets
     void applyPresetResources();
-    void updateScanKnobLabels(int mode);
+
+    // Mod routing
+    std::vector<ArcKnob*> modTargetKnobs;
+    ArcKnob* currentModHighlight = nullptr;
+    ModSource currentDragSource = ModSource::Envelope;
+    std::vector<ArcKnob::ModIndicator> modIndicatorScratch;
     void setupModRouting();
     void updateModDepthDisplays();
     ArcKnob* findKnobAt(juce::Point<int> pos);
-
-    // Mod routing drag state
-    std::vector<ArcKnob*> modTargetKnobs;
-    ArcKnob* currentModHighlight = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SDFSynthEditor)
 };

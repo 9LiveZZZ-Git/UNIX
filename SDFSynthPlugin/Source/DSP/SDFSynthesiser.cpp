@@ -18,18 +18,39 @@ void SDFSynthesiser::setWavetable(const WavetableGenerator::Wavetable& table)
     }
 }
 
-void SDFSynthesiser::setMipMappedWavetable(const MipMappedWavetable& mip, int crossfadeSamples)
+void SDFSynthesiser::setMipMappedWavetable(std::shared_ptr<const MipMappedWavetable> mip, int crossfadeSamples)
 {
-    bool hadTable = (currentMipTable.numLevels > 0);
-    currentMipTable = mip;
+    bool hadTable = (currentMipTable && currentMipTable->numLevels > 0);
+    // Shift history: two-slot keeps old tables alive while voices crossfade
+    prevPrevMipTable = std::move(prevMipTable);
+    prevMipTable = currentMipTable;  // shared_ptr copy (8 bytes, no data copy)
+    currentMipTable = std::move(mip);
     for (int i = 0; i < getNumVoices(); ++i)
     {
         if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
         {
             if (hadTable && crossfadeSamples > 0 && voice->isVoiceActive())
-                voice->crossfadeToMipTable(&currentMipTable, crossfadeSamples);
+                voice->crossfadeToMipTable(currentMipTable.get(), prevMipTable.get(), crossfadeSamples);
             else
-                voice->setMipMappedWavetable(&currentMipTable);
+                voice->setMipMappedWavetable(currentMipTable.get());
+        }
+    }
+}
+
+void SDFSynthesiser::setMipMappedWavetableB(std::shared_ptr<const MipMappedWavetable> mip, int crossfadeSamples)
+{
+    bool hadTable = (currentMipTableB && currentMipTableB->numLevels > 0);
+    prevPrevMipTableB = std::move(prevMipTableB);
+    prevMipTableB = currentMipTableB;
+    currentMipTableB = std::move(mip);
+    for (int i = 0; i < getNumVoices(); ++i)
+    {
+        if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
+        {
+            if (hadTable && crossfadeSamples > 0 && voice->isVoiceActive())
+                voice->crossfadeToMipTableB(currentMipTableB.get(), prevMipTableB.get(), crossfadeSamples);
+            else
+                voice->setMipMappedWavetableB(currentMipTableB.get());
         }
     }
 }
@@ -40,6 +61,33 @@ void SDFSynthesiser::updateADSR(float a, float d, float s, float r)
     {
         if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
             voice->setADSR(a, d, s, r);
+    }
+}
+
+void SDFSynthesiser::updateOscEffects(float fold, float pd, float pw, float sync)
+{
+    for (int i = 0; i < getNumVoices(); ++i)
+    {
+        if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
+            voice->setOscEffectParams(fold, pd, pw, sync);
+    }
+}
+
+void SDFSynthesiser::updateOscBParams(bool enable, float level, int semi, float fine, int mixMode, float fmDepth)
+{
+    for (int i = 0; i < getNumVoices(); ++i)
+    {
+        if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
+            voice->setOscBParams(enable, level, semi, fine, mixMode, fmDepth);
+    }
+}
+
+void SDFSynthesiser::updateUnisonParams(int numUnison, float detune, float spread, float blend)
+{
+    for (int i = 0; i < getNumVoices(); ++i)
+    {
+        if (auto* voice = dynamic_cast<SDFVoice*>(getVoice(i)))
+            voice->setUnisonParams(numUnison, detune, spread, blend);
     }
 }
 
@@ -82,10 +130,9 @@ float SDFSynthesiser::getMaxEnvelopeValue() const
 }
 
 juce::SynthesiserVoice* SDFSynthesiser::findVoiceToSteal(
-    juce::SynthesiserSound* soundToPlay,
+    juce::SynthesiserSound* /*soundToPlay*/,
     int /*midiChannel*/, int midiNoteNumber) const
 {
-    // Scoring: lower score = better candidate to steal
     juce::SynthesiserVoice* best = nullptr;
     float bestScore = 1e9f;
 
@@ -101,20 +148,15 @@ juce::SynthesiserVoice* SDFSynthesiser::findVoiceToSteal(
 
         float score = 0.f;
 
-        // Prefer voices in release (score 0) over sustaining (score 1000)
         if (sv->isInRelease())
             score += 0.f;
         else
             score += 1000.f;
 
-        // Prefer same note (score 0) over different (score 500)
         if (voice->getCurrentlyPlayingNote() == midiNoteNumber)
             score -= 500.f;
 
-        // Prefer quieter voices
         score += sv->getVelocityGain() * 100.f;
-
-        // Prefer older voices (lower index = allocated earlier, slight tiebreaker)
         score += static_cast<float>(i) * 0.1f;
 
         if (score < bestScore)

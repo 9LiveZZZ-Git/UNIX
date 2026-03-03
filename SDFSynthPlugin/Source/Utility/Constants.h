@@ -4,6 +4,7 @@ namespace sdf {
 
 constexpr int TABLE_SIZE    = 2048;
 constexpr int MAX_VOICES    = 16;
+constexpr int MAX_UNISON    = 8;
 constexpr int CONTOUR_RES   = 512;
 constexpr int VOXEL_RES     = 24;
 constexpr int CONTOUR_STEPS = 64;
@@ -55,4 +56,20 @@ constexpr float MARCH_TUKEY_TAPER      = 0.15f;   // Tukey window taper fraction
 // Mip-mapped wavetables
 constexpr int MIP_LEVELS = 11;
 
+// Modulation matrix
+constexpr int MAX_MOD_SLOTS = 32;
+
 } // namespace sdf
+
+// Mod source colors (for GUI display) — harmonized with main accent palette
+namespace sdfColour {
+    constexpr unsigned int modEnvelope   = 0xff00ff88; // tertiaryAccent (green)
+    constexpr unsigned int modLFO1       = 0xff00ffff; // primaryAccent (cyan)
+    constexpr unsigned int modLFO2       = 0xffff6432; // secondaryAccent (orange)
+    constexpr unsigned int modModWheel   = 0xff44bbcc; // muted cyan
+    constexpr unsigned int modVelocity   = 0xffcc8844; // warm amber
+    constexpr unsigned int modAftertouch = 0xff44cc99; // muted teal
+    constexpr unsigned int modKeyTrack   = 0xff5599aa; // steel blue
+    constexpr unsigned int modRandom     = 0xff778899; // steel gray (= mutedText)
+    constexpr unsigned int modMacro      = 0xff66ccaa; // soft teal
+}

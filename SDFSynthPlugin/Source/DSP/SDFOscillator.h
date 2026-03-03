@@ -35,12 +35,12 @@ public:
         flatWavetable = nullptr;
     }
 
-    // Set new mip table with crossfade from old
-    void crossfadeToMipTable(const MipMappedWavetable* newMip, int crossfadeSamples)
+    // Set new mip table with crossfade from old (caller provides stashed old data)
+    void crossfadeToMipTable(const MipMappedWavetable* newMip, const MipMappedWavetable* oldMip, int crossfadeSamples)
     {
-        if (mipTable != nullptr && newMip != mipTable)
+        if (oldMip != nullptr && newMip != oldMip)
         {
-            prevMipTable = mipTable;
+            prevMipTable = oldMip;
             crossfadeRemaining = crossfadeSamples;
             crossfadeTotal = crossfadeSamples;
         }
@@ -53,6 +53,11 @@ public:
         phase = 0.f;
         prevMipTable = nullptr;
         crossfadeRemaining = 0;
+        // Snap mip level to correct value to avoid initial aliasing
+        if (phaseInc > 0.f)
+            smoothedLevel = std::max(0.f, std::log2(phaseInc * sdf::TABLE_SIZE) + 0.5f);
+        else
+            smoothedLevel = 0.f;
     }
 
     float nextSample()
@@ -66,6 +71,43 @@ public:
         return 0.f;
     }
 
+    // Overload: apply a phase distortion offset before lookup
+    float nextSample(float phaseOffset)
+    {
+        float origPhase = phase;
+        float modPhase = phase + phaseOffset;
+        modPhase -= std::floor(modPhase);
+        phase = modPhase;
+        float sample = nextSampleNoAdvance();
+        phase = origPhase;
+        advancePhase();
+        return sample;
+    }
+
+    // Read-only lookup at current phase without advancing
+    float nextSampleNoAdvance() const
+    {
+        if (mipTable != nullptr)
+        {
+            float pos = phase * sdf::TABLE_SIZE;
+            // Must use const version
+            return const_cast<SDFOscillator*>(this)->sampleFromMip(mipTable, pos);
+        }
+        if (flatWavetable != nullptr)
+        {
+            float pos = phase * sdf::TABLE_SIZE;
+            return interpolate(flatWavetable, pos);
+        }
+        return 0.f;
+    }
+
+    // Advance phase by one sample (separated for composability)
+    void advancePhase()
+    {
+        phase += phaseInc;
+        phase -= std::floor(phase);
+    }
+
     float getPhase() const { return phase; }
     float getPhaseInc() const { return phaseInc; }
 
@@ -76,7 +118,8 @@ public:
     }
 
 private:
-    // Niemitalo optimal 4-point interpolation from a specific table
+    // Catmull-Rom cubic Hermite interpolation (4-point, 3rd-order)
+    // Exact at sample points: f=0 → b, f=1 → c
     float interpolate(const float* table, float pos) const
     {
         int i0 = static_cast<int>(pos) % sdf::TABLE_SIZE;
@@ -88,20 +131,22 @@ private:
         float a = table[im1], b = table[i0];
         float c = table[i1], d = table[i2];
 
-        float even1 = a + d, odd1 = a - d;
-        float even2 = b + c, odd2 = b - c;
-        float c0 = even1 * -0.0018f + even2 *  0.5018f;
-        float c1 = odd1  * -0.0900f + odd2  *  0.9900f;
-        float c2 = even1 *  0.3200f + even2 * -0.3200f;
-        float c3 = odd1  *  0.3900f + odd2  * -0.3900f;
-        float c4 = even1 * -0.2300f + even2 *  0.2300f;
-        return ((((c4 * f + c3) * f + c2) * f + c1) * f + c0);
+        float a0 = 0.5f * (-a + 3.f*b - 3.f*c + d);
+        float a1 = 0.5f * (2.f*a - 5.f*b + 4.f*c - d);
+        float a2 = 0.5f * (-a + c);
+        float a3 = b;
+        return ((a0 * f + a1) * f + a2) * f + a3;
     }
 
-    float sampleFromMip(const MipMappedWavetable* table, float pos) const
+    float sampleFromMip(const MipMappedWavetable* table, float pos)
     {
-        float level = std::log2(phaseInc * sdf::TABLE_SIZE);
+        // Bias +0.5 so we always lean toward the more band-limited table,
+        // eliminating aliasing at octave crossover boundaries
+        float level = std::log2(phaseInc * sdf::TABLE_SIZE) + 0.5f;
         level = std::clamp(level, 0.f, static_cast<float>(table->numLevels - 2));
+        // One-pole smoothing to prevent mip level jitter (fast: ~15ms settling)
+        smoothedLevel += (level - smoothedLevel) * 0.3f;
+        level = smoothedLevel;
 
         int levelI = static_cast<int>(level);
         float levelF = level - static_cast<float>(levelI);
@@ -129,10 +174,10 @@ private:
         // Crossfade with previous table
         if (crossfadeRemaining > 0 && prevMipTable != nullptr)
         {
+            --crossfadeRemaining;  // decrement first to fix off-by-one
             float prevSample = sampleFromMip(prevMipTable, pos);
             float t = static_cast<float>(crossfadeRemaining) / static_cast<float>(crossfadeTotal);
             sample = sample * (1.f - t) + prevSample * t;
-            --crossfadeRemaining;
             if (crossfadeRemaining <= 0)
                 prevMipTable = nullptr;
         }
@@ -146,6 +191,9 @@ private:
     float phaseInc = 0.f;
     const float* flatWavetable = nullptr;
     const MipMappedWavetable* mipTable = nullptr;
+
+    // Mip level hysteresis
+    float smoothedLevel = 0.f;
 
     // Crossfade state
     const MipMappedWavetable* prevMipTable = nullptr;

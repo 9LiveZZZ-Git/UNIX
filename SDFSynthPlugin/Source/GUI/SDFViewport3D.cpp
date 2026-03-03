@@ -48,6 +48,13 @@ void SDFViewport3D::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWhe
     cameraDistance = juce::jlimit(1.5f, 6.0f, cameraDistance - wheel.deltaY * 0.5f);
 }
 
+void SDFViewport3D::setVoxelSDF(std::shared_ptr<const VoxelSDF> sdf)
+{
+    std::lock_guard<std::mutex> lock(voxelMutex);
+    pendingVoxelSDF = sdf;
+    voxelNeedsUpload = true;
+}
+
 void SDFViewport3D::resized() {}
 
 // OpenGL
@@ -87,7 +94,9 @@ void SDFViewport3D::createShader()
         !shader->addFragmentShader(getFragmentShader()) ||
         !shader->link())
     {
-        DBG("Shader compile error: " + shader->getLastError());
+        // Capture error BEFORE reset clears it
+        auto err = shader->getLastError();
+        DBG("Shader compile error: " + err);
         shader.reset();
     }
 }
@@ -97,6 +106,31 @@ void SDFViewport3D::renderOpenGL()
     // Process deferred texture/skybox uploads on GL thread
     textureSystem.processGLUploads();
     skyboxSystem.processGLUpload();
+
+    // Upload voxel 3D texture if pending
+    {
+        std::lock_guard<std::mutex> lock(voxelMutex);
+        if (voxelNeedsUpload && pendingVoxelSDF && pendingVoxelSDF->res > 0)
+        {
+            if (voxelTexture3D == 0)
+                juce::gl::glGenTextures(1, &voxelTexture3D);
+
+            int r = pendingVoxelSDF->res;
+            juce::gl::glBindTexture(juce::gl::GL_TEXTURE_3D, voxelTexture3D);
+            juce::gl::glTexImage3D(juce::gl::GL_TEXTURE_3D, 0, juce::gl::GL_R32F,
+                                   r, r, r, 0, juce::gl::GL_RED, juce::gl::GL_FLOAT,
+                                   pendingVoxelSDF->data());
+            juce::gl::glTexParameteri(juce::gl::GL_TEXTURE_3D, juce::gl::GL_TEXTURE_MIN_FILTER, juce::gl::GL_LINEAR);
+            juce::gl::glTexParameteri(juce::gl::GL_TEXTURE_3D, juce::gl::GL_TEXTURE_MAG_FILTER, juce::gl::GL_LINEAR);
+            juce::gl::glTexParameteri(juce::gl::GL_TEXTURE_3D, juce::gl::GL_TEXTURE_WRAP_S, juce::gl::GL_CLAMP_TO_EDGE);
+            juce::gl::glTexParameteri(juce::gl::GL_TEXTURE_3D, juce::gl::GL_TEXTURE_WRAP_T, juce::gl::GL_CLAMP_TO_EDGE);
+            juce::gl::glTexParameteri(juce::gl::GL_TEXTURE_3D, juce::gl::GL_TEXTURE_WRAP_R, juce::gl::GL_CLAMP_TO_EDGE);
+            juce::gl::glBindTexture(juce::gl::GL_TEXTURE_3D, 0);
+
+            currentVoxelSDF = pendingVoxelSDF;
+            voxelNeedsUpload = false;
+        }
+    }
 
     if (!shader)
         return;
@@ -156,6 +190,23 @@ void SDFViewport3D::renderOpenGL()
     setInt("uScanMode", "scanMode");
     setFloat("uScanR", "scanRadius");
 
+    // SuperFormula params
+    setFloat("uSfM", "sfM");
+    setFloat("uSfN1", "sfN1");
+    setFloat("uSfN2", "sfN2");
+    setFloat("uSfN3", "sfN3");
+
+    // Onion shell
+    {
+        bool onion = apvts.getRawParameterValue("onionEnable")->load() > 0.5f;
+        if (auto u = shader->getUniformIDFromName("uOnionEnable"))
+            juce::gl::glUniform1i(u, onion ? 1 : 0);
+        setFloat("uOnionThickness", "onionThickness");
+    }
+
+    // Stairs operation
+    setFloat("uStairCount", "stairCount");
+
     // Bind textures from TextureSystem (units 0-5)
     textureSystem.bindToShader(*shader, 0);
 
@@ -171,6 +222,21 @@ void SDFViewport3D::renderOpenGL()
     }
     setFloat("uSkyboxRefl", "skyboxReflect");
     setFloat("uSkyboxBlur", "skyboxBlur");
+
+    // Bind voxel 3D texture on unit 7
+    {
+        bool hasVoxel = (voxelTexture3D != 0 && currentVoxelSDF != nullptr);
+        juce::gl::glActiveTexture(juce::gl::GL_TEXTURE7);
+        if (hasVoxel)
+            juce::gl::glBindTexture(juce::gl::GL_TEXTURE_3D, voxelTexture3D);
+        else
+            juce::gl::glBindTexture(juce::gl::GL_TEXTURE_3D, 0);
+        if (auto u = shader->getUniformIDFromName("uVoxelSDF"))
+            juce::gl::glUniform1i(u, 7);
+        if (auto u = shader->getUniformIDFromName("uHasVoxel"))
+            juce::gl::glUniform1i(u, hasVoxel ? 1 : 0);
+        juce::gl::glActiveTexture(juce::gl::GL_TEXTURE0);
+    }
 
     setFloat("uTexScale", "texScale");
     setFloat("uNormInt", "normIntensity");
@@ -191,6 +257,7 @@ void SDFViewport3D::openGLContextClosing()
 {
     textureSystem.releaseGL();
     skyboxSystem.releaseGL();
+    if (voxelTexture3D) { juce::gl::glDeleteTextures(1, &voxelTexture3D); voxelTexture3D = 0; }
     if (vao) { juce::gl::glDeleteVertexArrays(1, &vao); vao = 0; }
     if (vbo) { juce::gl::glDeleteBuffers(1, &vbo); vbo = 0; }
     shader.reset();
@@ -209,7 +276,14 @@ juce::String SDFViewport3D::getVertexShader()
 
 juce::String SDFViewport3D::getFragmentShader()
 {
-    return juce::String(R"(
+    return shaderPreamble() + shaderSdfPrimitives() + shaderScene()
+         + shaderDisplacement() + shaderNormals() + shaderShadowAndAO()
+         + shaderTexturing() + shaderSkybox() + shaderBRDF() + shaderMain();
+}
+
+juce::String SDFViewport3D::shaderPreamble()
+{
+    return R"(
         #version 330 core
         out vec4 fragColor;
 
@@ -239,6 +313,25 @@ juce::String SDFViewport3D::getFragmentShader()
         uniform float uHasSkybox;
         uniform float uSkyboxExp, uSkyboxRot, uSkyboxRefl, uSkyboxBlur;
 
+        // Voxel SDF uniforms
+        uniform sampler3D uVoxelSDF;
+        uniform int uHasVoxel;
+
+        // SuperFormula uniforms
+        uniform float uSfM, uSfN1, uSfN2, uSfN3;
+
+        // Onion shell uniforms
+        uniform int uOnionEnable;
+        uniform float uOnionThickness;
+
+        // Stairs operation
+        uniform float uStairCount;
+    )";
+}
+
+juce::String SDFViewport3D::shaderSdfPrimitives()
+{
+    return R"(
         // SDF primitives
         float sdSphere(vec3 p, float r) { return length(p) - r; }
         float sdBox(vec3 p, float b) {
@@ -258,18 +351,100 @@ juce::String SDFViewport3D::getFragmentShader()
             return (abs(p.x) + abs(p.y) + abs(p.z) - s) * 0.57735;
         }
 
+        float sdCapsule(vec3 p, float h, float r) {
+            p.y -= clamp(p.y, 0.0, h);
+            return length(p) - r;
+        }
+        float sdRoundBox(vec3 p, vec3 b, float r) {
+            vec3 q = abs(p) - b;
+            return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+        }
+        float sdHexPrism(vec3 p, vec2 h) {
+            const vec3 k = vec3(-0.8660254, 0.5, 0.57735);
+            p = abs(p);
+            p.xz -= 2.0 * min(dot(k.xy, p.xz), 0.0) * k.xy;
+            vec2 d = vec2(length(p.xz - vec2(clamp(p.x, -k.z*h.x, k.z*h.x), h.x)) * sign(p.z - h.x),
+                          p.y - h.y);
+            return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+        }
+        float sdTorus82(vec3 p, vec2 t) {
+            vec2 q = vec2(length(p.xz) - t.x, p.y);
+            return length(q) - t.y;
+        }
+        float sdTorus88(vec3 p, vec2 t) {
+            vec2 q = vec2(max(abs(p.x), abs(p.z)) - t.x, p.y);
+            return max(abs(q.x), abs(q.y)) - t.y;
+        }
+        float sdSuperFormula(vec3 p, float m, float n1, float n2, float n3, float scale) {
+            float r = length(p);
+            if (r < 1e-8) return -scale;
+            float theta = acos(clamp(p.y / r, -1.0, 1.0));
+            float phi = atan(p.z, p.x);
+            float a1 = abs(cos(m * theta / 4.0));
+            float b1 = abs(sin(m * theta / 4.0));
+            float r1 = pow(pow(a1, n2) + pow(b1, n3), -1.0/n1);
+            float a2 = abs(cos(m * phi / 4.0));
+            float b2 = abs(sin(m * phi / 4.0));
+            float r2 = pow(pow(a2, n2) + pow(b2, n3), -1.0/n1);
+            return r - r1 * r2 * scale;
+        }
+
+        float sampleVoxel(vec3 p) {
+            vec3 uv = p * 0.5 + 0.5;
+            return texture(uVoxelSDF, uv).r;
+        }
+
         float eS(int s, vec3 p, float sz) {
+            if (s == 5 && uHasVoxel == 1) return sampleVoxel(p);
             if (s == 0) return sdSphere(p, sz);
             if (s == 1) return sdBox(p, sz * 0.75);
             if (s == 2) return sdTorus(p, sz * 0.65, sz * 0.25);
             if (s == 3) return sdCyl(p, sz * 0.5, sz * 0.8);
+            if (s == 4) return sdOct(p, sz);
+            if (s == 6) return sdCapsule(p, sz, sz * 0.3);
+            if (s == 7) return sdRoundBox(p, vec3(sz), sz * 0.15);
+            if (s == 8) return sdHexPrism(p, vec2(sz, sz * 0.5));
+            if (s == 9) return sdTorus82(p, vec2(sz, sz * 0.25));
+            if (s == 10) return sdTorus88(p, vec2(sz, sz * 0.25));
+            if (s == 11) return sdSuperFormula(p, uSfM, uSfN1, uSfN2, uSfN3, sz);
             return sdOct(p, sz);
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderScene()
+{
+    return R"(
         float smin(float a, float b, float k) {
             if (k < 0.001) return min(a, b);
             float h = max(k - abs(a - b), 0.0) / k;
             return min(a, b) - h * h * h * k / 6.0;
+        }
+
+        float opSmoothIntersection(float d1, float d2, float k) {
+            float h = clamp(0.5 - 0.5*(d2-d1)/k, 0.0, 1.0);
+            return mix(d2, d1, h) + k*h*(1.0-h);
+        }
+        float opSmoothSubtraction(float d1, float d2, float k) {
+            float h = clamp(0.5 - 0.5*(d2+d1)/k, 0.0, 1.0);
+            return mix(d2, -d1, h) + k*h*(1.0-h);
+        }
+        float opChamferUnion(float a, float b, float r) {
+            return min(min(a, b), (a - r + b) * 0.7071);
+        }
+        float opChamferIntersection(float a, float b, float r) {
+            return max(max(a, b), (a + r + b) * 0.7071);
+        }
+        float opChamferSubtraction(float a, float b, float r) {
+            return opChamferIntersection(a, -b, r);
+        }
+        float opStairsUnion(float a, float b, float r, float n) {
+            float s = r / n;
+            float u = b - r;
+            return min(min(a, b), 0.5*(u + a + abs(mod(u - a + s, 2.0*s) - s)));
+        }
+        float opPipe(float a, float b, float r) {
+            return length(vec2(a, b)) - r;
         }
 
         float scene(vec3 p) {
@@ -280,26 +455,45 @@ juce::String SDFViewport3D::getFragmentShader()
             }
             float d1 = eS(uS1, q, uSz1);
             float d2 = eS(uS2, q - vec3(uOX, uOY, 0.0), uSz2);
-            if (uOp == 0) return smin(d1, d2, uK);
-            if (uOp == 1) return min(d1, d2);
-            if (uOp == 2) return max(d1, d2);
-            return max(d1, -d2);
-        }
+            float d;
+            if (uOp == 0) d = smin(d1, d2, uK);
+            else if (uOp == 1) d = min(d1, d2);
+            else if (uOp == 2) d = max(d1, d2);
+            else if (uOp == 3) d = max(d1, -d2);
+            else if (uOp == 4) d = opSmoothIntersection(d1, d2, uK);
+            else if (uOp == 5) d = opSmoothSubtraction(d1, d2, uK);
+            else if (uOp == 6) d = opChamferUnion(d1, d2, uK);
+            else if (uOp == 7) d = opChamferIntersection(d1, d2, uK);
+            else if (uOp == 8) d = opChamferSubtraction(d1, d2, uK);
+            else if (uOp == 9) d = opStairsUnion(d1, d2, uK, uStairCount);
+            else if (uOp == 10) d = opPipe(d1, d2, uK);
+            else d = min(d1, d2);
 
-        // Triplanar displacement
+            // Onion shell
+            if (uOnionEnable == 1) d = abs(d) - uOnionThickness;
+
+            return d;
+        }
+    )";
+}
+
+juce::String SDFViewport3D::shaderDisplacement()
+{
+    return R"(
+        // Triplanar displacement (caller passes p * uTexScale)
         float triplanarDisp(vec3 p) {
             vec3 n = normalize(p + vec3(0.001));
             vec3 w = abs(n); w = w / (w.x + w.y + w.z + 0.001);
-            float tx = texture(uTexDisp, p.yz * uTexScale * 0.5 + 0.5).r;
-            float ty = texture(uTexDisp, p.xz * uTexScale * 0.5 + 0.5).r;
-            float tz = texture(uTexDisp, p.xy * uTexScale * 0.5 + 0.5).r;
+            float tx = texture(uTexDisp, p.yz * 0.5 + 0.5).r;
+            float ty = texture(uTexDisp, p.xz * 0.5 + 0.5).r;
+            float tz = texture(uTexDisp, p.xy * 0.5 + 0.5).r;
             return tx * w.x + ty * w.y + tz * w.z;
         }
 
         float sceneDisp(vec3 p) {
             float d = scene(p);
             if (uHasTexDisp == 1) {
-                float disp = triplanarDisp(p);
+                float disp = triplanarDisp(p * uTexScale);
                 d -= disp * uDispAmt;
             }
             return d;
@@ -310,49 +504,63 @@ juce::String SDFViewport3D::getFragmentShader()
             float clipPlane = uScanY - p.y;
             return max(shape, clipPlane);
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderNormals()
+{
+    return R"(
         vec3 calcN(vec3 p) {
             // Tetrahedron normal estimation (4 SDF evals instead of 6)
-            vec2 e = vec2(0.003, -0.003);
+            // eps=0.001 matches reference; 0.003 was too large for thin torus tube (r=0.0875)
+            vec2 e = vec2(0.001, -0.001);
             return normalize(
                 e.xyy * sceneDisp(p + e.xyy) +
                 e.yyx * sceneDisp(p + e.yyx) +
                 e.yxy * sceneDisp(p + e.yxy) +
                 e.xxx * sceneDisp(p + e.xxx));
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderShadowAndAO()
+{
+    return R"(
+        // IQ's improved C1-continuous soft shadow (eliminates banding on curved surfaces)
         float shadow(vec3 ro, vec3 rd) {
             float r = 1.0;
-            float t = max(0.05, sceneDisp(ro)); // skip past nearby geometry
-            float omega = 1.2; // relaxed tracing for shadows
-            float prevD = 1e10;
-            for (int i = 0; i < 20; i++) {
+            float t = 0.02;
+            float ph = 1e10;
+            for (int i = 0; i < 32; i++) {
                 float h = sceneDisp(ro + rd * t);
-                r = min(r, 6.0 * h / t);
-                float step = h * omega;
-                if (step + h < prevD)
-                    t += clamp(h, 0.02, 0.25); // fallback
-                else
-                    t += clamp(step, 0.02, 0.25); // relaxed
-                prevD = h;
+                float y = h * h / (2.0 * ph);
+                float d = sqrt(h * h - y * y);
+                r = min(r, 8.0 * d / max(0.0, t - y));
+                ph = h;
+                t += clamp(h, 0.02, 0.25);
                 if (h < 0.001 || t > 5.0) break;
             }
             return clamp(r, 0.0, 1.0);
         }
 
-        // SDF-based ambient occlusion (5 evals along normal)
+        // SDF-based ambient occlusion (5 evals, conservative distances safe for thin geometry)
         float calcAO(vec3 p, vec3 n) {
             float occ = 0.0;
             float sca = 1.0;
             for (int i = 0; i < 5; i++) {
-                float h = 0.01 + 0.12 * float(i) / 4.0;
+                float h = 0.002 + 0.015 * float(i);  // max reach 0.062 (safe for torus tube r=0.0875)
                 float d = sceneDisp(p + n * h);
-                occ += (h - d) * sca;
-                sca *= 0.95;
+                occ += max(h - d, 0.0) * sca;
+                sca *= 0.85;
             }
-            return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
+            return clamp(1.0 - 2.0 * occ, 0.0, 1.0);
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderTexturing()
+{
+    return R"(
         // Triplanar texture
         vec3 triplanarTex(sampler2D tex, vec3 p, vec3 n) {
             vec3 w = abs(n); w = w / (w.x + w.y + w.z + 0.001);
@@ -373,7 +581,12 @@ juce::String SDFViewport3D::getFragmentShader()
             vec3 nz = vec3(tz.xy, 0.0) + vec3(0.0, 0.0, n.z);
             return normalize(nx * w.x + ny * w.y + nz * w.z);
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderSkybox()
+{
+    return R"(
         // Equirectangular UV from direction
         vec2 equirectUV(vec3 rd) {
             float phi = atan(rd.z, rd.x);
@@ -387,15 +600,22 @@ juce::String SDFViewport3D::getFragmentShader()
             float cr = cos(uSkyboxRot), sr = sin(uSkyboxRot);
             return vec3(cr * d.x - sr * d.z, d.y, sr * d.x + cr * d.z);
         }
+    )";
+}
 
+juce::String SDFViewport3D::shaderBRDF()
+{
+    return R"(
         // Cook-Torrance GGX BRDF functions
         float D_GGX(float NdotH, float a2) {
             float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-            return a2 / (3.14159 * d * d);
+            return a2 / max(3.14159 * d * d, 0.0001);
         }
-        float G_Smith(float NdotV, float NdotL, float a2) {
-            float g1 = NdotV / (NdotV * (1.0 - a2 * 0.5) + a2 * 0.5);
-            float g2 = NdotL / (NdotL * (1.0 - a2 * 0.5) + a2 * 0.5);
+        float G_Smith(float NdotV, float NdotL, float alpha) {
+            // Schlick-GGX: k = alpha/2 for analytic lights (alpha = roughness^2)
+            float k = alpha * 0.5;
+            float g1 = NdotV / max(NdotV * (1.0 - k) + k, 0.0001);
+            float g2 = NdotL / max(NdotL * (1.0 - k) + k, 0.0001);
             return g1 * g2;
         }
         vec3 F_Schlick(float VdotH, vec3 F0) {
@@ -407,7 +627,12 @@ juce::String SDFViewport3D::getFragmentShader()
             float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
             return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
         }
-    )") + R"(
+    )";
+}
+
+juce::String SDFViewport3D::shaderMain()
+{
+    return juce::String(R"(
         void main() {
             vec2 uv = (gl_FragCoord.xy - uRes * 0.5) / uRes.y;
             vec3 ro = vec3(cos(uCa) * cos(uCp), sin(uCp), sin(uCa) * cos(uCp)) * uCd;
@@ -430,8 +655,8 @@ juce::String SDFViewport3D::getFragmentShader()
             float disc = b_s * b_s - c_s;
             if (disc >= 0.0) {
                 t = max(-b_s - sqrt(disc), 0.0);
-                // Standard sphere tracing (80 iterations)
-                for (int i = 0; i < 80; i++) {
+                // Standard sphere tracing (100 iterations — thin torus tube needs more to converge)
+                for (int i = 0; i < 100; i++) {
                     p = ro + rd * t;
                     float d = sceneDisp(p);
                     if (d < minD) { minD = d; minP = p; minT = t; }
@@ -441,7 +666,7 @@ juce::String SDFViewport3D::getFragmentShader()
                 }
                 // Edge AA: near-miss rays get soft blended
                 if (!hit) {
-                    float threshold = pixelSize * minT * 1.5;
+                    float threshold = pixelSize * minT * 0.75;
                     if (minD < threshold) {
                         hit = true;
                         p = minP;
@@ -512,42 +737,28 @@ juce::String SDFViewport3D::getFragmentShader()
                 float alpha = roughness * roughness;
                 float a2 = alpha * alpha;
                 vec3 V = -rd;
-                float NdotV = max(dot(n, V), 0.001);
+                float NdotV = max(dot(n, V), 0.05);
                 vec3 F0 = vec3(0.04); // dielectric
                 float fres = pow(1.0 - NdotV, 4.0);
 
-                // Per-light GGX specular
+                // GGX specular on key light only (fill/rim are diffuse-only)
                 vec3 h1 = normalize(ld + V);
                 float NdotL1 = max(dot(n, ld), 0.0);
                 float NdotH1 = max(dot(n, h1), 0.0);
                 float VdotH1 = max(dot(V, h1), 0.0);
-                vec3 spec1v = (NdotL1 > 0.0) ? (D_GGX(NdotH1, a2) * G_Smith(NdotV, NdotL1, a2) * F_Schlick(VdotH1, F0)) / max(4.0 * NdotV * NdotL1, 0.001) : vec3(0.0);
+                vec3 spec1v = (NdotL1 > 0.0) ? (D_GGX(NdotH1, a2) * G_Smith(NdotV, NdotL1, alpha) * F_Schlick(VdotH1, F0)) / max(4.0 * NdotV * NdotL1, 0.001) : vec3(0.0);
 
-                vec3 h2 = normalize(ld2 + V);
-                float NdotL2 = max(dot(n, ld2), 0.0);
-                float NdotH2 = max(dot(n, h2), 0.0);
-                float VdotH2 = max(dot(V, h2), 0.0);
-                vec3 spec2v = (NdotL2 > 0.0) ? (D_GGX(NdotH2, a2) * G_Smith(NdotV, NdotL2, a2) * F_Schlick(VdotH2, F0)) / max(4.0 * NdotV * NdotL2, 0.001) : vec3(0.0);
-
-                vec3 h3 = normalize(ld3 + V);
-                float NdotL3 = max(dot(n, ld3), 0.0);
-                float NdotH3 = max(dot(n, h3), 0.0);
-                float VdotH3 = max(dot(V, h3), 0.0);
-                vec3 spec3v = (NdotL3 > 0.0) ? (D_GGX(NdotH3, a2) * G_Smith(NdotV, NdotL3, a2) * F_Schlick(VdotH3, F0)) / max(4.0 * NdotV * NdotL3, 0.001) : vec3(0.0);
-
-                float sh = shadow(p + n * 0.03, ld);
+                float sh = shadow(p + n * 0.02, ld);
 
                 vec3 bc;
 
                 if (isSliceFace) {
                     float intDist = abs(scene(p));
-                    bc = mix(vec3(0.03, 0.22, 0.25), vec3(0.05, 0.38, 0.42), intDist * 6.0);
-                    // Subtle grid
-                    float gx = abs(fract(p.x * 5.0) - 0.5);
-                    float gz = abs(fract(p.z * 5.0) - 0.5);
-                    float grid = 1.0 - smoothstep(0.0, 0.06, min(gx, gz));
-                    bc += vec3(0.0, 0.15, 0.14) * grid * 0.5;
-                    col = bc * (0.65 + diff * 0.3) + vec3(0.0, 0.35, 0.33) * 0.2;
+                    bc = mix(vec3(0.02, 0.18, 0.2), vec3(0.04, 0.35, 0.38), intDist * 8.0);
+                    // Concentric distance rings (topographic cross-section)
+                    float rings = sin(intDist * 80.0) * 0.5 + 0.5;
+                    bc = mix(bc, vec3(0.06, 0.45, 0.5), rings * 0.25);
+                    col = bc * (0.5 + diff * 0.35) + vec3(0.0, 0.3, 0.3) * 0.15;
                 } else {
                     bc = vec3(0.08, 0.55, 0.6);
                     bc += vec3(0.0, 0.15, 0.15) * fres * 0.4;
@@ -558,25 +769,22 @@ juce::String SDFViewport3D::getFragmentShader()
                         bc = mix(bc, texCol, uTexBlend);
                     }
 
-                    // Hemisphere ambient (warm sky vs cool ground)
-                    float hemi = n.y * 0.5 + 0.5;
-                    float ambient = mix(0.3, 0.5, hemi);
+                    float ambient = 0.4;
 
-                    // SDF-based AO (always available, texture-independent)
-                    float sdfAo = calcAO(p, n);
-                    ambient *= mix(1.0, sdfAo, uAOInt);
+                    // SDF-based ambient occlusion (geometry-aware)
+                    float sdfAO = calcAO(p, n);
+                    ambient *= mix(1.0, sdfAO, uAOInt);
 
                     // Texture AO (multiplicative on top of SDF AO)
                     if (uHasTexAO == 1) {
-                        float ao = triplanarTex(uTexAO, p * uTexScale, n).r;
-                        ao = mix(1.0, ao, uAOInt);
-                        ambient *= ao;
+                        float texAO = triplanarTex(uTexAO, p * uTexScale, n).r;
+                        ambient *= texAO;
                     }
 
-                    col = bc * (ambient + diff * 0.55 * sh + diff2 * 0.2 + diff3 * 0.12)
-                        + vec3(0.5, 0.9, 1.0) * spec1v * NdotL1 * sh * 0.5
-                        + vec3(0.9, 0.7, 0.5) * spec2v * NdotL2 * 0.2
-                        + vec3(0.6, 0.6, 0.8) * spec3v * NdotL3 * 0.1;
+                    // Energy conservation: reduce diffuse by Fresnel
+                    vec3 kD = vec3(1.0) - F_Schlick(NdotV, F0) * 0.5;
+                    col = bc * kD * (ambient + diff * 0.5 * sh + diff2 * 0.15 + diff3 * 0.1)
+                        + vec3(0.5, 0.9, 1.0) * spec1v * NdotL1 * sh * 0.5;
 
                     // Emissive
                     if (uHasTexEmit == 1) {
@@ -584,14 +792,14 @@ juce::String SDFViewport3D::getFragmentShader()
                         col += emitCol;
                     }
 
-                    // Skybox image-based ambient lighting (no per-contrib tone map; ACES at end)
+                    // Skybox image-based ambient lighting
                     if (uHasSkybox > 0.5) {
                         vec3 ambDir = rotateSkybox(n);
                         vec3 envAmbient = texture(uSkybox, equirectUV(ambDir)).rgb * uSkyboxExp * 0.15;
                         col += bc * envAmbient;
                     }
 
-                    // Skybox Fresnel reflections (no per-contrib tone map; ACES at end)
+                    // Skybox Fresnel reflections
                     if (uHasSkybox > 0.5 && uSkyboxRefl > 0.001) {
                         vec3 reflDir = rotateSkybox(reflect(rd, n));
                         vec3 envCol = texture(uSkybox, equirectUV(reflDir)).rgb * uSkyboxExp;
@@ -601,70 +809,54 @@ juce::String SDFViewport3D::getFragmentShader()
                         col = mix(col, envCol, reflAmount);
                     }
                 }
-    )" + R"(
+    )") + R"(
                 // Per-mode scan visualization (3D on surface)
                 float sliceDist = abs(p.y - uScanY);
                 float axR = length(p.xz);
                 float pAngle = atan(p.z, p.x);
 
                 if (uScanMode == 0) {
-                    // Contour: teal glow band at scan height
                     float sliceGlow = exp(-sliceDist * 25.0) * 0.6;
                     float edgeGlow = exp(-sliceDist * 8.0) * 0.15;
                     col += vec3(0.0, 0.9, 0.85) * sliceGlow + vec3(0.0, 0.4, 0.35) * edgeGlow;
 
                 } else if (uScanMode == 1) {
-                    // RayMarchSonify: radial ray lines from origin at scanY, golden-angle spaced
-                    // Matches DSP: 1-8 rays marching outward from center through SDF field
                     int numRays = 1 + int(uTopoMorph * 7.0);
                     float ga = 2.39996;
                     float beamSum = 0.0;
                     for (int r = 0; r < 8; r++) {
                         if (r >= numRays) break;
                         float rayAngle = float(r) * ga;
-                        // Angular distance to this ray on the surface
                         float angDist = pAngle - rayAngle;
                         angDist = angDist - 6.28318 * floor((angDist + 3.14159) / 6.28318);
-                        // Tight beam — sharp line from center outward
                         float beam = exp(-angDist * angDist * 800.0);
-                        // Brightest near scan height, visible along full radial extent
                         beam *= exp(-sliceDist * 6.0);
-                        // Intensity ramps up along radius (shows march progress)
                         beam *= smoothstep(0.0, uScanR * 2.0, axR);
                         beamSum += beam;
                     }
-                    // Scan range ring at 2x scanRadius (DSP march limit)
                     float rangeRing = exp(-abs(axR - uScanR * 2.0) * 20.0) * exp(-sliceDist * 8.0) * 0.3;
-                    // Origin point glow
                     float originDist = length(p - vec3(0.0, uScanY, 0.0));
                     float originGlow = exp(-originDist * 10.0) * 0.6;
                     col += vec3(0.0, 0.9, 0.85) * beamSum * 0.8;
                     col += vec3(0.3, 1.0, 0.95) * (rangeRing + originGlow);
 
                 } else if (uScanMode == 2) {
-                    // AcousticTrace: multiple Fibonacci-sphere rays from mic position
-                    // Matches DSP: 64 rays, showing a representative subset with bounce indicators
                     vec3 micPos = vec3(0.0, uScanY, 0.0);
                     float micDist = length(p - micPos);
                     float micGlow = exp(-micDist * 12.0) * 0.8;
                     int numBounces = 1 + int(uTopoMorph * 5.0);
-                    // Show 12 representative rays from Fibonacci sphere (subset of 64)
                     float raySum = 0.0;
                     float bounceSum = 0.0;
                     for (int r = 0; r < 12; r++) {
                         float ft = float(r) / 12.0;
                         float fphi = acos(1.0 - 2.0 * ft);
                         float ftheta = 2.39996 * float(r);
-                        vec3 rayDir = vec3(sin(fphi) * cos(ftheta),
-                                           sin(fphi) * sin(ftheta),
-                                           cos(fphi));
-                        // Distance from point to ray line from mic
+                        vec3 rayDir = vec3(sin(fphi) * cos(ftheta), sin(fphi) * sin(ftheta), cos(fphi));
                         vec3 toP = p - micPos;
                         float along = dot(toP, rayDir);
                         vec3 closest = micPos + rayDir * max(along, 0.0);
                         float lineDist = length(p - closest);
                         raySum += exp(-lineDist * 18.0) * 0.15;
-                        // Bounce impact points: concentric rings at bounce depths
                         for (int b = 0; b < 6; b++) {
                             if (b >= numBounces) break;
                             float bR = 0.2 + float(b) * 0.18;
@@ -678,9 +870,6 @@ juce::String SDFViewport3D::getFragmentShader()
                     col += vec3(0.7, 0.95, 1.0) * micGlow;
 
                 } else if (uScanMode == 3) {
-                    // GranularCurvature: surface grains at golden-angle positions
-                    // Matches DSP: grains placed on surface, dot size inversely relates to curvature
-                    // Approximate curvature on GPU using SDF Laplacian
                     float ga = 2.39996;
                     int numDots = 16 + int(uTopoMorph * 176.0);
                     numDots = min(numDots, 64);
@@ -691,16 +880,10 @@ juce::String SDFViewport3D::getFragmentShader()
                         float gAngle = mod(float(g) * ga, 6.28318) - 3.14159;
                         float angDist = pAngle - gAngle;
                         angDist = angDist - 6.28318 * floor((angDist + 3.14159) / 6.28318);
-                        // All grains at scanHeight (matches DSP — single height slice)
                         float yDist = p.y - uScanY;
-                        // Approximate curvature proxy: use SDF scene() value at grain's
-                        // angular position — flatter regions (low SDF gradient) = large dots,
-                        // sharp edges (high gradient change) = small dots
-                        float gR = 0.4; // approximate surface radius
+                        float gR = 0.4;
                         vec3 gP = vec3(cos(gAngle) * gR, uScanY, sin(gAngle) * gR);
                         float gD = abs(scene(gP));
-                        // Low distance to surface = high curvature region = small tight dot
-                        // High distance = flat region = larger softer dot
                         float sharpness = mix(30.0, 100.0, smoothstep(0.0, 0.3, gD));
                         float spot = exp(-(angDist * angDist * sharpness + yDist * yDist * 40.0));
                         dotSum += spot;
@@ -711,7 +894,6 @@ juce::String SDFViewport3D::getFragmentShader()
                     col += vec3(0.4, 1.0, 0.95) * brightDot * 0.4;
 
                 } else if (uScanMode == 4) {
-                    // VolumetricSpectro: vertical stack of glowing height rings
                     int numRings = 8 + int(uTopoMorph * 24.0);
                     numRings = min(numRings, 32);
                     float ringSum = 0.0;
@@ -721,7 +903,6 @@ juce::String SDFViewport3D::getFragmentShader()
                         float ringY = abs(p.y - hy);
                         float ringR = abs(axR - uScanR);
                         float ringDist = sqrt(ringY * ringY + ringR * ringR);
-                        // Brightness decreases with harmonic number
                         float brightness = 1.0 / sqrt(float(h + 1));
                         ringSum += exp(-ringDist * 18.0) * brightness;
                     }
@@ -730,7 +911,6 @@ juce::String SDFViewport3D::getFragmentShader()
                     col += vec3(0.9, 0.5, 1.0) * ringSum * 0.15;
 
                 } else if (uScanMode == 5) {
-                    // FieldTraverse: animated dot tracing Lissajous path, orange trail
                     float a_l, b_l, c_l, delta_l;
                     if (uTopoMorph < 0.5) {
                         float tm = uTopoMorph * 2.0;
@@ -739,30 +919,21 @@ juce::String SDFViewport3D::getFragmentShader()
                         float tm = (uTopoMorph - 0.5) * 2.0;
                         a_l = 1.0 + tm; b_l = 2.0 + tm; c_l = 1.5 + tm * 3.5; delta_l = 0.5 + tm;
                     }
-                    // Draw path: find closest point on Lissajous to hit point
                     float minDist = 100.0;
                     for (int s = 0; s < 64; s++) {
                         float lt = (float(s) / 64.0) * 6.28318;
-                        vec3 lp = vec3(sin(a_l * lt + delta_l) * uScanR,
-                                       uScanY + sin(c_l * lt) * uScanR * 0.4,
-                                       sin(b_l * lt) * uScanR);
+                        vec3 lp = vec3(sin(a_l * lt + delta_l) * uScanR, uScanY + sin(c_l * lt) * uScanR * 0.4, sin(b_l * lt) * uScanR);
                         minDist = min(minDist, length(p - lp));
                     }
                     float pathGlow = exp(-minDist * 12.0) * 0.4;
-                    // Animated dot on path
                     float dotT = mod(uTime * 1.2, 6.28318);
-                    vec3 dotPos = vec3(sin(a_l * dotT + delta_l) * uScanR,
-                                       uScanY + sin(c_l * dotT) * uScanR * 0.4,
-                                       sin(b_l * dotT) * uScanR);
+                    vec3 dotPos = vec3(sin(a_l * dotT + delta_l) * uScanR, uScanY + sin(c_l * dotT) * uScanR * 0.4, sin(b_l * dotT) * uScanR);
                     float dotDist = length(p - dotPos);
                     float dotGlow = exp(-dotDist * 15.0) * 1.5;
-                    // Trail behind dot
                     float trailGlow = 0.0;
                     for (int tr = 1; tr <= 8; tr++) {
                         float trT = dotT - float(tr) * 0.08;
-                        vec3 trP = vec3(sin(a_l * trT + delta_l) * uScanR,
-                                        uScanY + sin(c_l * trT) * uScanR * 0.4,
-                                        sin(b_l * trT) * uScanR);
+                        vec3 trP = vec3(sin(a_l * trT + delta_l) * uScanR, uScanY + sin(c_l * trT) * uScanR * 0.4, sin(b_l * trT) * uScanR);
                         float trDist = length(p - trP);
                         trailGlow += exp(-trDist * 12.0) * (1.0 - float(tr) * 0.1);
                     }
@@ -787,12 +958,13 @@ juce::String SDFViewport3D::getFragmentShader()
                 }
             }
 
-            // ACES filmic tone mapping + gamma + vignette
+            // ACES filmic tone mapping + sRGB gamma + vignette + dither
             col = ACESFilm(col);
-            col = pow(col, vec3(0.9));
+            col = pow(col, vec3(1.0 / 2.2));
             col *= 1.0 - 0.12 * dot(uv, uv);
+            float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+            col += (dither - 0.5) / 255.0;
             fragColor = vec4(col, 1.0);
         }
     )";
-    // Note: string split at rotateSkybox/main boundary for MSVC string literal limit
 }

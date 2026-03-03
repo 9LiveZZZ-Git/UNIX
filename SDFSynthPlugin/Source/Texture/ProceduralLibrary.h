@@ -12,7 +12,7 @@ class ProceduralLibrary
 public:
     static juce::StringArray getPresetNames();
     static juce::StringArray getPresetKeys();
-    static ProceduralTexture generate(const juce::String& key, int size = 256);
+    static ProceduralTexture generate(const juce::String& key, int size = 512);
 
 private:
     // Noise primitives
@@ -42,6 +42,10 @@ private:
     static ProceduralTexture generateIce(int sz);
     static ProceduralTexture generateObsidian(int sz);
     static ProceduralTexture generateAlien(int sz);
+
+    // New textures (fixes missing preset keys)
+    static ProceduralTexture generateNebula(int sz);
+    static ProceduralTexture generateAurora(int sz);
 
     static juce::Image normalFromDisp(const juce::Image& disp);
 };

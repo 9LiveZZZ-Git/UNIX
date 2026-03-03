@@ -7,7 +7,8 @@ juce::StringArray ProceduralLibrary::getPresetNames()
     return { "Checkerboard", "Brick", "Brushed Metal", "Concrete",
              "Organic", "Marble", "Lava", "Circuit Board",
              "Wood Grain", "Crystal", "Rust", "Scales",
-             "Plasma", "Ice", "Obsidian", "Alien" };
+             "Plasma", "Ice", "Obsidian", "Alien",
+             "Nebula", "Aurora" };
 }
 
 juce::StringArray ProceduralLibrary::getPresetKeys()
@@ -15,7 +16,8 @@ juce::StringArray ProceduralLibrary::getPresetKeys()
     return { "checkerboard", "brick", "metal", "concrete",
              "organic", "marble", "lava", "circuit",
              "wood", "crystal", "rust", "scales",
-             "plasma", "ice", "obsidian", "alien" };
+             "plasma", "ice", "obsidian", "alien",
+             "nebula", "aurora" };
 }
 
 float ProceduralLibrary::seededRand(float x, float y)
@@ -53,20 +55,29 @@ juce::Image ProceduralLibrary::normalFromDisp(const juce::Image& disp)
     juce::Image::BitmapData src(disp, juce::Image::BitmapData::readOnly);
     juce::Image::BitmapData dst(normal, juce::Image::BitmapData::writeOnly);
 
+    // Helper to sample with wrapping
+    auto sample = [&](int x, int y) -> float {
+        return src.getPixelColour((x + sz) % sz, (y + sz) % sz).getRed() / 255.f;
+    };
+
     for (int y = 0; y < sz; ++y)
     {
         for (int x = 0; x < sz; ++x)
         {
-            float dL = src.getPixelColour((x - 1 + sz) % sz, y).getRed() / 255.f;
-            float dR = src.getPixelColour((x + 1) % sz, y).getRed() / 255.f;
-            float dU = src.getPixelColour(x, (y - 1 + sz) % sz).getRed() / 255.f;
-            float dD = src.getPixelColour(x, (y + 1) % sz).getRed() / 255.f;
-            float nx = dL - dR, ny = dU - dD, nz = 1.f;
-            float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-            nx /= len; ny /= len; nz /= len;
+            // Scharr 3x3 operator (weighted, 8-neighbor sampling)
+            // Horizontal gradient (Gx): [-3 0 3; -10 0 10; -3 0 3] / 32
+            float gx = (-3.f * sample(x-1, y-1) + 3.f * sample(x+1, y-1)
+                       -10.f * sample(x-1, y)   +10.f * sample(x+1, y)
+                        -3.f * sample(x-1, y+1) + 3.f * sample(x+1, y+1)) / 32.f;
+            // Vertical gradient (Gy): [-3 -10 -3; 0 0 0; 3 10 3] / 32
+            float gy = (-3.f * sample(x-1, y-1) -10.f * sample(x, y-1) - 3.f * sample(x+1, y-1)
+                        +3.f * sample(x-1, y+1) +10.f * sample(x, y+1) + 3.f * sample(x+1, y+1)) / 32.f;
+            float nz = 1.f;
+            float len = std::sqrt(gx * gx + gy * gy + nz * nz);
+            gx /= len; gy /= len; nz /= len;
             dst.setPixelColour(x, y, juce::Colour::fromRGBA(
-                static_cast<uint8_t>((nx * 0.5f + 0.5f) * 255),
-                static_cast<uint8_t>((ny * 0.5f + 0.5f) * 255),
+                static_cast<uint8_t>((gx * 0.5f + 0.5f) * 255),
+                static_cast<uint8_t>((gy * 0.5f + 0.5f) * 255),
                 static_cast<uint8_t>((nz * 0.5f + 0.5f) * 255),
                 255));
         }
@@ -92,6 +103,8 @@ ProceduralTexture ProceduralLibrary::generate(const juce::String& key, int size)
     if (key == "ice")          return generateIce(size);
     if (key == "obsidian")     return generateObsidian(size);
     if (key == "alien")        return generateAlien(size);
+    if (key == "nebula")       return generateNebula(size);
+    if (key == "aurora")       return generateAurora(size);
     return generateCheckerboard(size);
 }
 
@@ -327,22 +340,36 @@ ProceduralTexture ProceduralLibrary::generateLava(int sz)
             float u = x / static_cast<float>(sz), v = y / static_cast<float>(sz);
             float n = fbm(u * 3, v * 3, 6);
             float hot = std::max(0.f, n * 2.f - 0.5f);
+
+            // RidgeFBM crack network for defined lava flow channels
+            float crack = ridgeFbm(u * 4.f, v * 4.f, 5);
+            float crackIntensity = std::clamp(crack * 1.5f - 0.3f, 0.f, 1.f);
+
+            // Darker cooled surface between cracks, brighter in cracks
+            float combined = std::max(hot, crackIntensity * 0.8f);
+            float cooled = (1.f - crackIntensity) * 0.6f;
+
+            int cr = static_cast<int>(20 + cooled * 30 + combined * 215);
+            int cg = static_cast<int>(5 + cooled * 8 + combined * 140);
+            int cb = static_cast<int>(3 + cooled * 5 + combined * 20);
             tex.colorMap.setPixelAt(x, y, juce::Colour(
-                static_cast<uint8_t>(std::clamp(static_cast<int>(40 + hot * 215), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(10 + hot * 140), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(5 + hot * 20), 0, 255))));
-            uint8_t dv = static_cast<uint8_t>(std::clamp(static_cast<int>(40 + n * 200), 0, 255));
+                static_cast<uint8_t>(std::clamp(cr, 0, 255)),
+                static_cast<uint8_t>(std::clamp(cg, 0, 255)),
+                static_cast<uint8_t>(std::clamp(cb, 0, 255))));
+
+            uint8_t dv = static_cast<uint8_t>(std::clamp(static_cast<int>(40 + n * 160 + crackIntensity * 60), 0, 255));
             tex.dispMap.setPixelAt(x, y, juce::Colour(dv, dv, dv));
-            uint8_t rv = static_cast<uint8_t>(std::clamp(static_cast<int>(200 - hot * 180), 0, 255));
+            uint8_t rv = static_cast<uint8_t>(std::clamp(static_cast<int>(200 - combined * 180), 0, 255));
             tex.roughMap.setPixelAt(x, y, juce::Colour(rv, rv, rv));
-            uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(120 + hot * 130), 0, 255));
+            uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(120 + combined * 130), 0, 255));
             tex.aoMap.setPixelAt(x, y, juce::Colour(av, av, av));
 
-            // Emissive: orange-red crack glow
+            // Brighter emissive in cracks
+            float emitHot = std::max(hot, crackIntensity);
             tex.emitMap.setPixelAt(x, y, juce::Colour(
-                static_cast<uint8_t>(std::clamp(static_cast<int>(hot * 255), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(hot * hot * 180), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(hot * hot * hot * 40), 0, 255))));
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitHot * 255), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitHot * emitHot * 200), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitHot * emitHot * emitHot * 50), 0, 255))));
         }
     tex.normalMap = normalFromDisp(tex.dispMap);
     return tex;
@@ -379,8 +406,10 @@ ProceduralTexture ProceduralLibrary::generateCircuit(int sz)
             if (seededRand(static_cast<float>(gx), static_cast<float>(gy)) > 0.5f)
             {
                 int cx = gx * cs + cs / 2;
+                // Wider bus lines for some traces
+                int hw = (seededRand(static_cast<float>(gx + 50), static_cast<float>(gy + 50)) > 0.7f) ? 2 : 1;
                 for (int y = gy * cs; y < (gy + 1) * cs; ++y)
-                    for (int dx = -1; dx <= 1; ++dx)
+                    for (int dx = -hw; dx <= hw; ++dx)
                         if (cx + dx >= 0 && cx + dx < sz && y >= 0 && y < sz)
                             tex.colorMap.setPixelAt(cx + dx, y, juce::Colour(0x1a, 0x6b, 0x3a));
             }
@@ -389,27 +418,57 @@ ProceduralTexture ProceduralLibrary::generateCircuit(int sz)
             if (seededRand(static_cast<float>(gx + 100), static_cast<float>(gy)) > 0.5f)
             {
                 int cy = gy * cs + cs / 2;
+                int hw = (seededRand(static_cast<float>(gx + 150), static_cast<float>(gy + 150)) > 0.7f) ? 2 : 1;
                 for (int x = gx * cs; x < (gx + 1) * cs; ++x)
-                    for (int dy = -1; dy <= 1; ++dy)
+                    for (int dy = -hw; dy <= hw; ++dy)
                         if (x >= 0 && x < sz && cy + dy >= 0 && cy + dy < sz)
                             tex.colorMap.setPixelAt(x, cy + dy, juce::Colour(0x1a, 0x6b, 0x3a));
             }
 
-            // LED dots (color + emissive)
-            if (seededRand(static_cast<float>(gx), static_cast<float>(gy + 100)) > 0.8f)
+            // Diagonal traces (new)
+            if (seededRand(static_cast<float>(gx + 300), static_cast<float>(gy + 300)) > 0.75f)
+            {
+                int x0 = gx * cs, y0 = gy * cs;
+                for (int i = 0; i < cs; ++i)
+                {
+                    int px = x0 + i, py = y0 + i;
+                    if (px >= 0 && px < sz && py >= 0 && py < sz)
+                        tex.colorMap.setPixelAt(px, py, juce::Colour(0x1a, 0x6b, 0x3a));
+                    if (px + 1 < sz && py >= 0 && py < sz)
+                        tex.colorMap.setPixelAt(px + 1, py, juce::Colour(0x1a, 0x6b, 0x3a));
+                }
+            }
+
+            // LED dots with multi-color variety (green, red, blue)
+            if (seededRand(static_cast<float>(gx), static_cast<float>(gy + 100)) > 0.78f)
             {
                 int cx = gx * cs + cs / 2;
                 int cy = gy * cs + cs / 2;
+                float ledType = seededRand(static_cast<float>(gx + 400), static_cast<float>(gy + 400));
+                uint8_t lr, lg, lb, er, eg, eb;
+                if (ledType > 0.66f) // green
+                {
+                    lr = 0x3a; lg = 0xff; lb = 0x7a;
+                    er = 0; eg = static_cast<uint8_t>(180 + static_cast<int>(seededRand(static_cast<float>(gx + 1), static_cast<float>(gy)) * 75)); eb = 0;
+                }
+                else if (ledType > 0.33f) // red
+                {
+                    lr = 0xff; lg = 0x3a; lb = 0x2a;
+                    er = static_cast<uint8_t>(180 + static_cast<int>(seededRand(static_cast<float>(gx + 2), static_cast<float>(gy)) * 75)); eg = 0x20; eb = 0;
+                }
+                else // blue
+                {
+                    lr = 0x3a; lg = 0x7a; lb = 0xff;
+                    er = 0; eg = 0x30; eb = static_cast<uint8_t>(180 + static_cast<int>(seededRand(static_cast<float>(gx + 3), static_cast<float>(gy)) * 75));
+                }
                 for (int dy = -2; dy <= 2; ++dy)
                     for (int dx = -2; dx <= 2; ++dx)
                     {
                         int px = cx + dx, py = cy + dy;
                         if (px >= 0 && px < sz && py >= 0 && py < sz)
                         {
-                            tex.colorMap.setPixelAt(px, py, juce::Colour(0x3a, 0xff, 0x7a));
-                            int gr = static_cast<int>(180 + seededRand(static_cast<float>(gx + 1), static_cast<float>(gy)) * 75);
-                            tex.emitMap.setPixelAt(px, py, juce::Colour(
-                                0, static_cast<uint8_t>(std::min(gr, 255)), 0));
+                            tex.colorMap.setPixelAt(px, py, juce::Colour(lr, lg, lb));
+                            tex.emitMap.setPixelAt(px, py, juce::Colour(er, eg, eb));
                         }
                     }
             }
@@ -531,17 +590,20 @@ ProceduralTexture ProceduralLibrary::generateCrystal(int sz)
     for (int y = 0; y < sz; ++y)
         for (int x = 0; x < sz; ++x)
         {
-            float u = x / static_cast<float>(sz) * 5.f;
-            float v = y / static_cast<float>(sz) * 5.f;
+            float uf = x / static_cast<float>(sz);
+            float vf = y / static_cast<float>(sz);
+            float u = uf * 5.f;
+            float v = vf * 5.f;
             float f1, f2;
             voronoi2D(u, v, f1, f2);
             float edge = f2 - f1;
             float facet = f1;
 
+            // More saturated blue-white palette
             float t = std::clamp(facet * 1.5f, 0.f, 1.f);
-            int r = static_cast<int>(180 + t * 75);
-            int g = static_cast<int>(200 + t * 55);
-            int b = static_cast<int>(230 + t * 25);
+            int r = static_cast<int>(160 + t * 60);
+            int g = static_cast<int>(190 + t * 50);
+            int b = static_cast<int>(240 + t * 15);
             tex.colorMap.setPixelAt(x, y, juce::Colour(
                 static_cast<uint8_t>(std::clamp(r, 0, 255)),
                 static_cast<uint8_t>(std::clamp(g, 0, 255)),
@@ -553,11 +615,18 @@ ProceduralTexture ProceduralLibrary::generateCrystal(int sz)
             tex.roughMap.setPixelAt(x, y, juce::Colour(rv, rv, rv));
             uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(140 + edge * 200), 0, 255));
             tex.aoMap.setPixelAt(x, y, juce::Colour(av, av, av));
+
+            // Edge glow + internal refraction highlights
             float edgeGlow = std::max(0.f, 1.f - edge * 6.f);
+            // Refraction: bright specular spots inside facets
+            float refract = seededRand(u * 2.3f + 0.7f, v * 2.3f + 1.3f);
+            float refractSpot = std::max(0.f, refract - 0.88f) * 8.f;
+            refractSpot *= (1.f - std::clamp(edge * 3.f, 0.f, 1.f)); // only inside facets
+
             tex.emitMap.setPixelAt(x, y, juce::Colour(
-                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 100), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 180), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 255), 0, 255))));
+                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 100 + refractSpot * 200), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 180 + refractSpot * 220), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(edgeGlow * 255 + refractSpot * 255), 0, 255))));
         }
     tex.normalMap = normalFromDisp(tex.dispMap);
     return tex;
@@ -757,9 +826,16 @@ ProceduralTexture ProceduralLibrary::generateObsidian(int sz)
             float detail = fbm(u * 10, v * 10, 4) * 0.2f;
             float flow = std::sin(swirl * 8.f) * 0.5f + 0.5f;
 
-            int r = static_cast<int>(15 + flow * 35 + detail * 30);
-            int g = static_cast<int>(12 + flow * 20 + detail * 15);
-            int b = static_cast<int>(20 + flow * 45 + detail * 25);
+            // Subtle iridescent color shift using sine-based hue rotation
+            float hueShift = swirl * 6.f + u * 2.f;
+            float iridR = std::sin(hueShift) * 0.5f + 0.5f;
+            float iridG = std::sin(hueShift + 2.094f) * 0.5f + 0.5f;
+            float iridB = std::sin(hueShift + 4.189f) * 0.5f + 0.5f;
+            float iridAmt = flow * 0.12f; // subtle
+
+            int r = static_cast<int>(15 + flow * 35 + detail * 30 + iridR * iridAmt * 60);
+            int g = static_cast<int>(12 + flow * 20 + detail * 15 + iridG * iridAmt * 40);
+            int b = static_cast<int>(20 + flow * 45 + detail * 25 + iridB * iridAmt * 50);
             tex.colorMap.setPixelAt(x, y, juce::Colour(
                 static_cast<uint8_t>(std::clamp(r, 0, 255)),
                 static_cast<uint8_t>(std::clamp(g, 0, 255)),
@@ -771,12 +847,16 @@ ProceduralTexture ProceduralLibrary::generateObsidian(int sz)
             tex.roughMap.setPixelAt(x, y, juce::Colour(rv, rv, rv));
             uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(220 + detail * 30), 0, 255));
             tex.aoMap.setPixelAt(x, y, juce::Colour(av, av, av));
+
+            // More dramatic flow edge emissive (brighter purple/blue at edges)
             float flowEdge = std::abs(std::sin(swirl * 16.f));
-            flowEdge = std::max(0.f, flowEdge - 0.85f) * 6.f;
+            flowEdge = std::max(0.f, flowEdge - 0.8f) * 5.f;
+            float flowEdge2 = std::abs(std::sin(swirl * 12.f + 1.f));
+            flowEdge2 = std::max(0.f, flowEdge2 - 0.85f) * 4.f;
             tex.emitMap.setPixelAt(x, y, juce::Colour(
-                static_cast<uint8_t>(std::clamp(static_cast<int>(flowEdge * 60), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(flowEdge * 20), 0, 255)),
-                static_cast<uint8_t>(std::clamp(static_cast<int>(flowEdge * 80), 0, 255))));
+                static_cast<uint8_t>(std::clamp(static_cast<int>((flowEdge * 80 + flowEdge2 * 40)), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>((flowEdge * 25 + flowEdge2 * 15)), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>((flowEdge * 120 + flowEdge2 * 80)), 0, 255))));
         }
     tex.normalMap = normalFromDisp(tex.dispMap);
     return tex;
@@ -824,6 +904,161 @@ ProceduralTexture ProceduralLibrary::generateAlien(int sz)
                 static_cast<uint8_t>(std::clamp(static_cast<int>(veinGlow * 100 + spotGlow * 200), 0, 255)),
                 static_cast<uint8_t>(std::clamp(static_cast<int>(veinGlow * 255 + spotGlow * 80), 0, 255)),
                 static_cast<uint8_t>(std::clamp(static_cast<int>(veinGlow * 80 + spotGlow * 150), 0, 255))));
+        }
+    tex.normalMap = normalFromDisp(tex.dispMap);
+    return tex;
+}
+
+// ============================================================
+// Nebula texture — cosmic gas clouds with filamentary structure
+// ============================================================
+
+ProceduralTexture ProceduralLibrary::generateNebula(int sz)
+{
+    ProceduralTexture tex;
+    tex.colorMap = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.dispMap  = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.roughMap = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.aoMap    = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.emitMap  = juce::Image(juce::Image::ARGB, sz, sz, true);
+
+    for (int y = 0; y < sz; ++y)
+        for (int x = 0; x < sz; ++x)
+        {
+            float u = x / static_cast<float>(sz), v = y / static_cast<float>(sz);
+
+            // Layered cloud structure
+            float ridge = ridgeFbm(u * 3.f, v * 3.f, 6);
+            float warp = warpedFbm(u * 2.f, v * 2.f, 2.5f, 5);
+            float detail = fbm(u * 8.f + 3.f, v * 8.f + 7.f, 4);
+
+            // Purple/magenta/teal color blend
+            float r_f = ridge * 0.45f + warp * 0.25f + detail * 0.08f;
+            float g_f = warp * 0.12f + detail * 0.15f + ridge * 0.08f;
+            float b_f = ridge * 0.35f + warp * 0.4f + detail * 0.1f;
+
+            // Magenta hotspots
+            float hot = std::max(0.f, ridge - 0.55f) * 3.f;
+            r_f += hot * 0.5f;
+            b_f += hot * 0.3f;
+
+            // Teal wisps
+            float teal = std::max(0.f, warp - 0.5f) * 2.f;
+            g_f += teal * 0.3f;
+            b_f += teal * 0.25f;
+
+            // Star hotspots
+            float star = seededRand(u * 600.f, v * 600.f);
+            if (star > 0.997f)
+            {
+                float brightness = (star - 0.997f) * 333.f;
+                r_f += brightness * 0.9f;
+                g_f += brightness * 0.85f;
+                b_f += brightness;
+            }
+
+            // Dark base: mostly the gas is dim
+            int r = static_cast<int>(r_f * 255.f);
+            int g = static_cast<int>(g_f * 255.f);
+            int b = static_cast<int>(b_f * 255.f);
+            tex.colorMap.setPixelAt(x, y, juce::Colour(
+                static_cast<uint8_t>(std::clamp(r, 0, 255)),
+                static_cast<uint8_t>(std::clamp(g, 0, 255)),
+                static_cast<uint8_t>(std::clamp(b, 0, 255))));
+
+            uint8_t dv = static_cast<uint8_t>(std::clamp(static_cast<int>(80 + ridge * 100 + warp * 60), 0, 255));
+            tex.dispMap.setPixelAt(x, y, juce::Colour(dv, dv, dv));
+            uint8_t rv = static_cast<uint8_t>(std::clamp(static_cast<int>(120 + detail * 100), 0, 255));
+            tex.roughMap.setPixelAt(x, y, juce::Colour(rv, rv, rv));
+            uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(160 + ridge * 80), 0, 255));
+            tex.aoMap.setPixelAt(x, y, juce::Colour(av, av, av));
+
+            // Strong nebula glow in filaments
+            float glowR = std::clamp(ridge * 0.6f + hot * 0.8f, 0.f, 1.f);
+            float glowG = std::clamp(teal * 0.4f + hot * 0.1f, 0.f, 1.f);
+            float glowB = std::clamp(ridge * 0.4f + teal * 0.5f + hot * 0.4f, 0.f, 1.f);
+            tex.emitMap.setPixelAt(x, y, juce::Colour(
+                static_cast<uint8_t>(std::clamp(static_cast<int>(glowR * 200), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(glowG * 160), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(glowB * 220), 0, 255))));
+        }
+    tex.normalMap = normalFromDisp(tex.dispMap);
+    return tex;
+}
+
+// ============================================================
+// Aurora texture — shimmering curtain-like vertical bands
+// ============================================================
+
+ProceduralTexture ProceduralLibrary::generateAurora(int sz)
+{
+    ProceduralTexture tex;
+    tex.colorMap = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.dispMap  = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.roughMap = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.aoMap    = juce::Image(juce::Image::ARGB, sz, sz, true);
+    tex.emitMap  = juce::Image(juce::Image::ARGB, sz, sz, true);
+
+    for (int y = 0; y < sz; ++y)
+        for (int x = 0; x < sz; ++x)
+        {
+            float u = x / static_cast<float>(sz), v = y / static_cast<float>(sz);
+
+            // Vertical curtain bands with sine-wave distortion
+            float warpX = fbm(u * 2.f + 1.f, v * 4.f + 3.f, 4) * 0.6f;
+            float warpY = fbm(u * 3.f + 5.f, v * 2.f + 7.f, 3) * 0.3f;
+            float curtain = std::sin((u + warpX) * 12.f) * 0.5f + 0.5f;
+            float flow = fbm((u + warpX) * 5.f, (v + warpY) * 8.f, 5);
+
+            // Vertical fade: strongest in upper portion
+            float vertFade = std::clamp(1.f - v * 1.2f, 0.f, 1.f);
+            vertFade = vertFade * vertFade;
+
+            // Aurora intensity
+            float intensity = curtain * flow * vertFade;
+            intensity = std::clamp(intensity * 2.f, 0.f, 1.f);
+
+            // Color cycling: green -> cyan -> purple based on position
+            float phase = u * 4.f + warpX * 2.f + v * 0.5f;
+            float sinP = std::sin(phase * 3.14159f);
+            float cosP = std::cos(phase * 3.14159f);
+
+            float r_f = std::max(0.f, -sinP) * 0.5f * intensity + intensity * 0.05f;
+            float g_f = std::max(0.f, cosP) * 0.8f * intensity + intensity * 0.25f;
+            float b_f = (std::max(0.f, sinP) * 0.4f + std::max(0.f, -cosP) * 0.3f) * intensity + intensity * 0.1f;
+
+            // Bright edge glow at curtain edges
+            float edgeDist = std::abs(curtain - 0.5f) * 2.f;
+            float edgeGlow = std::max(0.f, 1.f - edgeDist * 3.f) * vertFade;
+
+            // Dark sky base
+            r_f += 0.02f;
+            g_f += 0.03f;
+            b_f += 0.05f;
+
+            int r = static_cast<int>(r_f * 255.f);
+            int g = static_cast<int>(g_f * 255.f);
+            int b = static_cast<int>(b_f * 255.f);
+            tex.colorMap.setPixelAt(x, y, juce::Colour(
+                static_cast<uint8_t>(std::clamp(r, 0, 255)),
+                static_cast<uint8_t>(std::clamp(g, 0, 255)),
+                static_cast<uint8_t>(std::clamp(b, 0, 255))));
+
+            uint8_t dv = static_cast<uint8_t>(std::clamp(static_cast<int>(100 + intensity * 80 + flow * 40), 0, 255));
+            tex.dispMap.setPixelAt(x, y, juce::Colour(dv, dv, dv));
+            uint8_t rv = static_cast<uint8_t>(std::clamp(static_cast<int>(100 + (1.f - intensity) * 120), 0, 255));
+            tex.roughMap.setPixelAt(x, y, juce::Colour(rv, rv, rv));
+            uint8_t av = static_cast<uint8_t>(std::clamp(static_cast<int>(180 + intensity * 60), 0, 255));
+            tex.aoMap.setPixelAt(x, y, juce::Colour(av, av, av));
+
+            // Emissive: bright aurora glow + edge highlights
+            float emitR = r_f * 0.6f + edgeGlow * 0.3f;
+            float emitG = g_f * 0.8f + edgeGlow * 0.6f;
+            float emitB = b_f * 0.5f + edgeGlow * 0.4f;
+            tex.emitMap.setPixelAt(x, y, juce::Colour(
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitR * 255), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitG * 255), 0, 255)),
+                static_cast<uint8_t>(std::clamp(static_cast<int>(emitB * 255), 0, 255))));
         }
     tex.normalMap = normalFromDisp(tex.dispMap);
     return tex;

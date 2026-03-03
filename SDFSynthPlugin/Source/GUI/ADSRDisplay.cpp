@@ -140,9 +140,9 @@ void ADSRDisplay::paint(juce::Graphics& g)
 
     // Background
     g.setColour(SDFLookAndFeel::panelBg);
-    g.fillRoundedRectangle(bounds, 4.f);
+    g.fillRoundedRectangle(bounds, 8.f);
     g.setColour(SDFLookAndFeel::borderColour.withAlpha(0.4f));
-    g.drawRoundedRectangle(bounds, 4.f, 1.f);
+    g.drawRoundedRectangle(bounds, 8.f, 1.f);
 
     // Reserve space for labels + values at bottom
     float labelRowH = 22.f;
@@ -172,8 +172,8 @@ void ADSRDisplay::paint(juce::Graphics& g)
 
     // Vertical gradient fill
     g.setGradientFill(juce::ColourGradient(
-        SDFLookAndFeel::tertiaryAccent.withAlpha(0.18f), drawArea.getX(), drawArea.getY(),
-        SDFLookAndFeel::tertiaryAccent.withAlpha(0.03f), drawArea.getX(), drawArea.getBottom(),
+        SDFLookAndFeel::tertiaryAccent.withAlpha(0.22f), drawArea.getX(), drawArea.getY(),
+        SDFLookAndFeel::tertiaryAccent.withAlpha(0.04f), drawArea.getX(), drawArea.getBottom(),
         false));
     g.fillPath(fillPath);
 
@@ -196,10 +196,17 @@ void ADSRDisplay::paint(juce::Graphics& g)
     drawDash(pts.decayEnd.x);
     drawDash(pts.sustainEnd.x);
 
-    // --- Control points (ring style with filled center on drag) ---
+    // --- Control points (ring style with filled center on drag + glow) ---
     auto drawPoint = [&](juce::Point<float> p, bool active)
     {
-        float r = active ? 6.f : 5.f;
+        float r = active ? 7.f : 6.f;
+        // Glow ring on active
+        if (active)
+        {
+            g.setColour(SDFLookAndFeel::tertiaryAccent.withAlpha(0.20f));
+            float gr = r + 4.f;
+            g.fillEllipse(p.x - gr, p.y - gr, gr * 2.f, gr * 2.f);
+        }
         // Outer ring
         g.setColour(SDFLookAndFeel::tertiaryAccent.withAlpha(active ? 1.f : 0.65f));
         g.fillEllipse(p.x - r, p.y - r, r * 2.f, r * 2.f);
@@ -223,7 +230,7 @@ void ADSRDisplay::paint(juce::Graphics& g)
     }
 
     // --- Segment labels and values ---
-    g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), 8.f, juce::Font::bold));
+    g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), SDFLookAndFeel::scaled(8.f), juce::Font::bold));
 
     float aMid = (pts.start.x + pts.attackPeak.x) * 0.5f;
     float dMid = (pts.attackPeak.x + pts.decayEnd.x) * 0.5f;
@@ -257,9 +264,9 @@ void ADSRDisplay::paint(juce::Graphics& g)
     // --- MOD drag handle ---
     auto modRect = getModHandleRect();
     g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(modDragging ? 0.9f : 0.4f));
-    g.fillRoundedRectangle(modRect, 3.f);
+    g.fillRoundedRectangle(modRect, 5.f);
     g.setColour(SDFLookAndFeel::bgColour);
-    g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), 7.f, juce::Font::bold));
+    g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), SDFLookAndFeel::scaled(7.f), juce::Font::bold));
     g.drawText("MOD", modRect, juce::Justification::centred);
 }
 
