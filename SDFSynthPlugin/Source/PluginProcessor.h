@@ -71,6 +71,7 @@ public:
 
     // Expose for GUI
     const WavetableGenerator::Wavetable& getCurrentWavetable() const { return currentWavetable; }
+    std::shared_ptr<const std::vector<ContourPoint>> getCurrentContourPtr() const { return currentContour; }
     const std::vector<ContourPoint>& getCurrentContour() const
     {
         static const std::vector<ContourPoint> empty;

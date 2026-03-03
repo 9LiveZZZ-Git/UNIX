@@ -269,7 +269,7 @@ void SDFSynthEditor::parameterChanged(const juce::String& parameterID, float)
 void SDFSynthEditor::timerCallback()
 {
     waveformScope.setWavetable(&processor.getCurrentWavetable());
-    waveformScope.setContour(&processor.getCurrentContour());
+    waveformScope.setContour(processor.getCurrentContourPtr());
     waveformScope.setPlayheadPhase(processor.getActivePhase());
     waveformScope.setScanHeight(processor.apvts.getRawParameterValue("scanHeight")->load());
     waveformScope.setTopoMorph(processor.apvts.getRawParameterValue("topoMorph")->load());
