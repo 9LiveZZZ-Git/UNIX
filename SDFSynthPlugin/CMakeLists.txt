@@ -43,7 +43,7 @@ endif()
 # =============================================================================
 juce_add_plugin(SDFSynthPlugin
     COMPANY_NAME          "UNIX Audio"
-    COMPANY_WEBSITE       "https://github.com/your-username/sdf-synth"
+    COMPANY_WEBSITE       "https://github.com/9LiveZZZ-Git/UNIX"
     PLUGIN_MANUFACTURER_CODE Unix
     PLUGIN_CODE           SdSy
 
