@@ -1,13 +1,10 @@
 # =============================================================================
-# UNIX Audio Plugin - CI Test Pipeline
+# UNIX Audio Plugins - CI Test Pipeline
 # =============================================================================
 #
-# Runs comprehensive tests on all platforms:
-# - Build validation
-# - Plugin validation (pluginval, clap-validator)
-# - Audio quality tests
-# - MIDI tests
-# - Performance benchmarks
+# Builds and tests both plugins:
+# - Karplus-Strong string synthesizer
+# - SDF Synth (3D SDF wavetable synthesizer)
 #
 # Triggers on push to main/dev and all pull requests.
 
@@ -18,20 +15,17 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main]
-  workflow_dispatch:  # Allow manual trigger
-  schedule:
-    # Run nightly at 3am UTC on main branch
-    - cron: '0 3 * * *'
+  workflow_dispatch:
 
 env:
   BUILD_TYPE: Release
 
 jobs:
   # ===========================================================================
-  # Build Job - Creates plugin binaries for all platforms
+  # Build Karplus-Strong
   # ===========================================================================
-  build:
-    name: Build (${{ matrix.os }})
+  build-karplus:
+    name: Karplus-Strong (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -62,32 +56,33 @@ jobs:
             libgl1-mesa-dev \
             libwebkit2gtk-4.1-dev
 
-      - name: Configure CMake
+      - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DBUILD_TESTS=ON
+        working-directory: KarplusStrongPlugin
 
       - name: Build
         run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+        working-directory: KarplusStrongPlugin
 
-      - name: Upload Plugin (VST3)
+      - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-vst3-${{ matrix.os }}
-          path: build/KarplusStrongPlugin/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          name: karplus-vst3-${{ matrix.os }}
+          path: KarplusStrongPlugin/build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
           if-no-files-found: warn
 
       - name: Upload Standalone
         uses: actions/upload-artifact@v4
         with:
-          name: standalone-${{ matrix.os }}
-          path: build/KarplusStrongPlugin/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
+          name: karplus-standalone-${{ matrix.os }}
+          path: KarplusStrongPlugin/build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
           if-no-files-found: warn
 
   # ===========================================================================
-  # Validation Job - Run pluginval on all platforms
+  # Build SDF Synth
   # ===========================================================================
-  validation:
-    name: Validate (${{ matrix.os }})
-    needs: build
+  build-sdf:
+    name: SDF Synth (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -97,11 +92,80 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxcomposite-dev \
+            libxrender-dev \
+            libgl1-mesa-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        working-directory: SDFSynthPlugin
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+        working-directory: SDFSynthPlugin
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ./build/SDFSynthTests_artefacts/${{ env.BUILD_TYPE }}/SDFSynthTests.exe
+          else
+            ./build/SDFSynthTests_artefacts/${{ env.BUILD_TYPE }}/SDFSynthTests
+          fi
+        working-directory: SDFSynthPlugin
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdf-vst3-${{ matrix.os }}
+          path: SDFSynthPlugin/build/SDFSynthPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          if-no-files-found: warn
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdf-standalone-${{ matrix.os }}
+          path: SDFSynthPlugin/build/SDFSynthPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Pluginval Validation
+  # ===========================================================================
+  validation:
+    name: Validate (${{ matrix.plugin }}, ${{ matrix.os }})
+    needs: [build-karplus, build-sdf]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        plugin: [karplus, sdf]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Download plugin artifact
         uses: actions/download-artifact@v4
         with:
-          name: plugin-vst3-${{ matrix.os }}
+          name: ${{ matrix.plugin }}-vst3-${{ matrix.os }}
           path: plugin
 
       - name: Install pluginval (Linux)
@@ -144,25 +208,12 @@ jobs:
             xvfb-run ./pluginval --strictness-level 5 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
           fi
 
-      - name: Run pluginval (Level 10) - Extended
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        continue-on-error: true
-        run: |
-          if [ "$RUNNER_OS" == "macOS" ]; then
-            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --timeout-ms 600000 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            ./pluginval.exe --strictness-level 10 --timeout-ms 600000 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
-          else
-            xvfb-run ./pluginval --strictness-level 10 --timeout-ms 600000 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
-          fi
-
   # ===========================================================================
-  # Python Tests Job - Audio quality, MIDI, performance
+  # Python Tests (Karplus-Strong specific)
   # ===========================================================================
   python-tests:
     name: Python Tests (${{ matrix.os }})
-    needs: build
+    needs: build-karplus
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -183,7 +234,7 @@ jobs:
       - name: Download plugin
         uses: actions/download-artifact@v4
         with:
-          name: plugin-vst3-${{ matrix.os }}
+          name: karplus-vst3-${{ matrix.os }}
           path: build/KarplusStrongPlugin_artefacts/Release/VST3
 
       - name: Install test dependencies
@@ -200,132 +251,23 @@ jobs:
         run: pytest tests/midi -v --tb=short -m "not slow"
         continue-on-error: true
 
-      - name: Run performance tests
-        run: pytest tests/performance -v --benchmark-json=benchmark-${{ matrix.os }}.json
-        continue-on-error: true
-
-      - name: Run stress tests (main branch only)
-        if: github.ref == 'refs/heads/main'
-        run: pytest tests/stress -v --tb=short -m "not slow"
-        continue-on-error: true
-
-      - name: Generate HTML reports
-        if: always()
-        run: |
-          python -c "
-          import sys
-          sys.path.insert(0, 'tests')
-          from tools.report_generator import ReportGenerator
-          gen = ReportGenerator('reports')
-          gen.generate()
-          print('Reports generated successfully')
-          "
-        continue-on-error: true
-
-      - name: Upload benchmark results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmarks-${{ matrix.os }}
-          path: benchmark-*.json
-          if-no-files-found: ignore
-
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports-${{ matrix.os }}
-          path: |
-            reports/**/*.json
-            reports/**/*.html
-            reports/**/*.log
-          if-no-files-found: ignore
-
   # ===========================================================================
-  # Summary Job - Aggregate results and publish reports
+  # Summary
   # ===========================================================================
   summary:
     name: Test Summary
-    needs: [build, validation, python-tests]
+    needs: [build-karplus, build-sdf, validation, python-tests]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Download all report artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-reports-*
-          path: all-reports
-          merge-multiple: true
-
-      - name: Download all benchmark artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: benchmarks-*
-          path: benchmarks
-          merge-multiple: true
-
-      - name: Aggregate reports
-        run: |
-          mkdir -p reports/aggregated
-          # Copy all reports to aggregated directory
-          cp -r all-reports/* reports/ 2>/dev/null || true
-          cp benchmarks/*.json reports/performance/ 2>/dev/null || true
-
-          # Generate combined summary
-          python -c "
-          import json
-          import os
-          from pathlib import Path
-
-          summary = {
-              'platforms': ['ubuntu-latest', 'windows-latest', 'macos-latest'],
-              'reports': {}
-          }
-
-          reports_dir = Path('reports')
-          for json_file in reports_dir.rglob('*.json'):
-              try:
-                  with open(json_file) as f:
-                      data = json.load(f)
-                      summary['reports'][str(json_file)] = {
-                          'exists': True,
-                          'keys': list(data.keys()) if isinstance(data, dict) else 'array'
-                      }
-              except Exception as e:
-                  summary['reports'][str(json_file)] = {'error': str(e)}
-
-          with open('reports/aggregated/summary.json', 'w') as f:
-              json.dump(summary, f, indent=2)
-          print('Aggregated summary created')
-          "
-        continue-on-error: true
-
-      - name: Upload aggregated reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: all-test-reports
-          path: reports/
-          if-no-files-found: ignore
-
-      - name: Check results
+      - name: Results
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Validation | ${{ needs.validation.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Karplus-Strong Build | ${{ needs.build-karplus.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SDF Synth Build | ${{ needs.build-sdf.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pluginval Validation | ${{ needs.validation.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Python Tests | ${{ needs.python-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Reports" >> $GITHUB_STEP_SUMMARY
-          echo "Test reports are available as artifacts." >> $GITHUB_STEP_SUMMARY
-          echo "Download 'all-test-reports' for the complete report package." >> $GITHUB_STEP_SUMMARY

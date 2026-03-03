@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(BUILD_TESTS "Build test targets" OFF)
 
 # =============================================================================
-# KarplusStrong Plugin (main target)
+# Plugin Targets
 # =============================================================================
 add_subdirectory(KarplusStrongPlugin)
+add_subdirectory(SDFSynthPlugin)
