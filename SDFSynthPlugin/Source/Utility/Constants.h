@@ -8,7 +8,7 @@ constexpr int MAX_UNISON    = 8;
 constexpr int CONTOUR_RES   = 512;
 constexpr int VOXEL_RES     = 24;
 constexpr int CONTOUR_STEPS = 64;
-constexpr int BINARY_ITERS  = 10;  // Reduced from 16: Illinois method converges faster
+constexpr int BINARY_ITERS  = 10;  // Reduced from 16: bisection converges fast enough
 constexpr float MAX_RADIUS  = 2.0f;
 constexpr float PI          = 3.14159265358979323846f;
 constexpr float TWO_PI      = 6.28318530717958647692f;
@@ -28,7 +28,6 @@ constexpr int SPECTRO_HEIGHT_SLICES   = 512;
 constexpr int FIELD_PATH_OVERSAMPLE   = 4;
 
 // Acoustic ray tracing
-constexpr float ACOUSTIC_ENERGY_DECAY  = 0.6f;   // per-bounce energy retention
 constexpr float ACOUSTIC_SURFACE_THRESH = 0.002f; // SDF threshold for surface hit
 constexpr float ACOUSTIC_MIN_STEP      = 0.005f;  // minimum march step size
 constexpr float ACOUSTIC_MAX_PATH      = 6.f;     // max total ray path length
@@ -48,7 +47,7 @@ constexpr int   GRAIN_MIN_COUNT        = 16;
 constexpr float SPECTRO_HEIGHT_RANGE   = 0.4f;    // ±range from scanHeight
 
 // Field traversal
-constexpr int   FIELD_CROSSFADE_LEN    = 32;      // loop-point crossfade samples
+constexpr int   FIELD_CROSSFADE_LEN    = 48;      // loop-point crossfade samples
 
 // Ray march sonification
 constexpr float MARCH_TUKEY_TAPER      = 0.15f;   // Tukey window taper fraction

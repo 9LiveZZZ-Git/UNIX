@@ -534,20 +534,28 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
     int activeBins = 8 + static_cast<int>(std::floor(topoMorph * static_cast<float>(sdf::SPECTRO_HEIGHT_SLICES - 8)));
     activeBins = std::clamp(activeBins, 8, sdf::SPECTRO_HEIGHT_SLICES);
 
-    // Phase 4d: shape-adaptive height range — pre-scan vertical extent
+    // Shape-adaptive height range — pre-scan vertical extent over 4 angles
     float heightRange = sdf::SPECTRO_HEIGHT_RANGE;
     {
-        float dirX = std::cos(0.f) * scanRadius;
-        float dirZ = std::sin(0.f) * scanRadius;
-        float lo = scanHeight, hi = scanHeight;
-        for (float dy = 0.01f; dy < 1.5f; dy += 0.02f)
+        float loSum = 0.f, hiSum = 0.f;
+        constexpr int probeAngles = 4;
+        for (int pa = 0; pa < probeAngles; ++pa)
         {
-            if (scene.evaluate(dirX, scanHeight + dy, dirZ) < 0.3f)
-                hi = scanHeight + dy;
-            if (scene.evaluate(dirX, scanHeight - dy, dirZ) < 0.3f)
-                lo = scanHeight - dy;
+            float angle = static_cast<float>(pa) / probeAngles * sdf::TWO_PI;
+            float dirX = std::cos(angle) * scanRadius;
+            float dirZ = std::sin(angle) * scanRadius;
+            float lo = scanHeight, hi = scanHeight;
+            for (float dy = 0.01f; dy < 1.5f; dy += 0.02f)
+            {
+                if (scene.evaluate(dirX, scanHeight + dy, dirZ) < 0.3f)
+                    hi = scanHeight + dy;
+                if (scene.evaluate(dirX, scanHeight - dy, dirZ) < 0.3f)
+                    lo = scanHeight - dy;
+            }
+            loSum += lo;
+            hiSum += hi;
         }
-        float extent = (hi - lo) * 0.5f;
+        float extent = (hiSum / probeAngles - loSum / probeAngles) * 0.5f;
         if (extent > 0.05f)
             heightRange = std::clamp(extent, 0.1f, 1.0f);
     }
@@ -675,9 +683,7 @@ WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
         table[i] = sum / wSum;
     }
 
-    // Phase 4e: extended crossfade for smoother loop closure
-    int crossfadeLen = sdf::FIELD_CROSSFADE_LEN + 16; // 48 samples
-    crossfadeLoopPoint(table, crossfadeLen);
+    crossfadeLoopPoint(table, sdf::FIELD_CROSSFADE_LEN);
 
     removeDCAndNormalize(table);
 
@@ -689,6 +695,7 @@ WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
 void WavetableGenerator::fft(std::vector<std::complex<float>>& data, bool inverse)
 {
     int n = static_cast<int>(data.size());
+    jassert(n > 0 && (n & (n - 1)) == 0); // must be power of 2
 
     // Bit-reversal permutation
     for (int i = 1, j = 0; i < n; ++i)

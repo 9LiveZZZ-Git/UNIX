@@ -23,8 +23,7 @@ public:
           sfN2Knob(apvts, "sfN2", "SF N2", SDFLookAndFeel::secondaryAccent),
           sfN3Knob(apvts, "sfN3", "SF N3", SDFLookAndFeel::secondaryAccent),
           onionThicknessKnob(apvts, "onionThickness", "Shell", SDFLookAndFeel::secondaryAccent),
-          stairCountKnob(apvts, "stairCount", "Steps", SDFLookAndFeel::secondaryAccent),
-          apvtsRef(apvts)
+          stairCountKnob(apvts, "stairCount", "Steps", SDFLookAndFeel::secondaryAccent)
     {
         // Shape A dropdown
         auto shapeNames = getShapeNames();
@@ -183,7 +182,7 @@ public:
             sfN2Knob.setBounds(row.removeFromLeft(kw));
             sfN3Knob.setBounds(row.removeFromLeft(kw));
             onionEnableBtn.setBounds(row.removeFromLeft(22).reduced(0, 2));
-            onionThicknessKnob.setBounds(row.removeFromLeft(kw - 11));
+            onionThicknessKnob.setBounds(row.removeFromLeft(juce::jmax(0, kw - 11)));
             stairCountKnob.setBounds(row);
         }
     }
@@ -205,11 +204,6 @@ public:
     ArcKnob& getTopoMorphKnob() { return topoMorphKnob; }
     ArcKnob& getDistScaleKnob() { return distScaleKnob; }
     juce::ComboBox& getScanModeBox() { return scanModeBox; }
-
-    void syncButtonsFromAPVTS()
-    {
-        // All selectors use ComboBoxAttachment — sync is automatic
-    }
 
 private:
     static juce::StringArray getShapeNames()
@@ -242,5 +236,4 @@ private:
     ArcKnob onionThicknessKnob, stairCountKnob;
     juce::ToggleButton onionEnableBtn{ "Onion" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onionEnableAttach;
-    juce::AudioProcessorValueTreeState& apvtsRef;
 };

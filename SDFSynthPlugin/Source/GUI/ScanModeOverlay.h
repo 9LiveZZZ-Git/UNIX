@@ -15,13 +15,13 @@ public:
     ~ScanModeOverlay() override { stopTimer(); }
 
     void setScanMode(int m) { scanMode = m; }
-    void setContour(std::shared_ptr<const std::vector<ContourPoint>> c) { contour = std::move(c); }
+    void setContour(std::shared_ptr<const std::vector<ContourPoint>> c) { std::atomic_store(&contour, std::move(c)); }
     void setScanHeight(float h) { scanHeight = h; }
     void setTopoMorph(float m) { topoMorph = m; }
     void setScanRadius(float r) { scanRadius = r; }
     void setPlayheadPhase(float p) { playheadPhase = p; }
     void setDistScale(float d) { distScale = d; }
-    void setAlgorithmData(std::shared_ptr<const ScanAlgorithmData> d) { algData = std::move(d); }
+    void setAlgorithmData(std::shared_ptr<const ScanAlgorithmData> d) { std::atomic_store(&algData, std::move(d)); }
 
     void timerCallback() override
     {
@@ -32,6 +32,10 @@ public:
 
     void paint(juce::Graphics& g) override
     {
+        // Take thread-safe snapshots of shared_ptrs for this paint call
+        localContour = std::atomic_load(&contour);
+        localAlgData = std::atomic_load(&algData);
+
         auto bounds = getLocalBounds().toFloat();
 
         // Semi-transparent background
@@ -59,6 +63,9 @@ public:
             case 4: drawSpectralMode(g, area); break;
             case 5: drawTraverseMode(g, area); break;
         }
+
+        localContour.reset();
+        localAlgData.reset();
     }
 
 private:
@@ -68,7 +75,7 @@ private:
     // --- Helpers ---
     void drawShapeOutline(juce::Graphics& g, juce::Rectangle<float> area, float alpha = 0.5f) const
     {
-        if (!contour || contour->empty()) return;
+        if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
@@ -76,9 +83,9 @@ private:
 
         juce::Path path;
         bool started = false;
-        for (size_t i = 0; i < contour->size(); ++i)
+        for (size_t i = 0; i < localContour->size(); ++i)
         {
-            auto& pt = (*contour)[i];
+            auto& pt = (*localContour)[i];
             if (!pt.valid) continue;
             float px = cx + pt.x * scale;
             float py = cy - pt.z * scale;
@@ -95,12 +102,12 @@ private:
 
     float getContourRadius(float angle) const
     {
-        if (!contour || contour->empty()) return 0.5f;
-        while (angle < 0.f) angle += TWO_PI;
-        while (angle >= TWO_PI) angle -= TWO_PI;
-        float idx = (angle / TWO_PI) * static_cast<float>(contour->size());
-        int i0 = static_cast<int>(idx) % static_cast<int>(contour->size());
-        auto& pt = (*contour)[static_cast<size_t>(i0)];
+        if (!localContour || localContour->empty()) return 0.5f;
+        angle = std::fmod(angle, TWO_PI);
+        if (angle < 0.f) angle += TWO_PI;
+        float idx = (angle / TWO_PI) * static_cast<float>(localContour->size());
+        int i0 = static_cast<int>(idx) % static_cast<int>(localContour->size());
+        auto& pt = (*localContour)[static_cast<size_t>(i0)];
         return pt.valid ? pt.r : 0.5f;
     }
 
@@ -108,7 +115,7 @@ private:
     void drawContourMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         drawShapeOutline(g, area, 0.6f);
-        if (!contour || contour->empty()) return;
+        if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
@@ -171,8 +178,8 @@ private:
         float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact values from DSP when available
-        int numRays = algData ? algData->numRays : (1 + static_cast<int>(topoMorph * 7.f));
-        float maxRange = algData ? algData->maxRange : (scanRadius * 2.f);
+        int numRays = localAlgData ? localAlgData->numRays : (1 + static_cast<int>(topoMorph * 7.f));
+        float maxRange = localAlgData ? localAlgData->maxRange : (scanRadius * 2.f);
         float goldenAngle = 2.39996322f;
 
         // Adaptive Tukey taper matching DSP
@@ -274,7 +281,7 @@ private:
         float cy = area.getCentreY();
         float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
-        int maxBounces = algData ? algData->maxBounces : (1 + static_cast<int>(std::floor(topoMorph * 5.f)));
+        int maxBounces = localAlgData ? localAlgData->maxBounces : (1 + static_cast<int>(std::floor(topoMorph * 5.f)));
 
         // Show multiple representative rays (8 of the 64)
         int dispRays = 8;
@@ -363,7 +370,7 @@ private:
         float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact DSP values when available
-        int numGrains = algData ? algData->numGrains
+        int numGrains = localAlgData ? localAlgData->numGrains
                                 : (16 + static_cast<int>(topoMorph * 240.f));
         numGrains = juce::jmin(numGrains, 256);
 
@@ -378,13 +385,13 @@ private:
 
         for (int i = 0; i < dispGrains; ++i)
         {
-            float angle, freq, curvature;
+            float angle = 0.f, freq = 2.f, curvature = 0.f;
 
-            if (algData && i < static_cast<int>(algData->grainData.size()))
+            if (localAlgData && i < static_cast<int>(localAlgData->grainData.size()))
             {
-                angle = algData->grainData[static_cast<size_t>(i)].angle;
-                freq = algData->grainData[static_cast<size_t>(i)].freq;
-                curvature = algData->grainData[static_cast<size_t>(i)].curvature;
+                angle = localAlgData->grainData[static_cast<size_t>(i)].angle;
+                freq = localAlgData->grainData[static_cast<size_t>(i)].freq;
+                curvature = localAlgData->grainData[static_cast<size_t>(i)].curvature;
             }
             else
             {
@@ -453,7 +460,7 @@ private:
     void drawSpectralMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         constexpr int totalBins = sdf::SPECTRO_HEIGHT_SLICES;
-        int activeBins = algData ? algData->activeBins
+        int activeBins = localAlgData ? localAlgData->activeBins
                                  : (8 + static_cast<int>(topoMorph * static_cast<float>(totalBins - 8)));
         activeBins = juce::jlimit(1, totalBins, activeBins);
 
@@ -466,10 +473,10 @@ private:
 
         // Find max weight for normalization
         float maxWeight = 0.01f;
-        if (algData)
+        if (localAlgData)
         {
             for (int h = 0; h < totalBins; ++h)
-                maxWeight = std::max(maxWeight, algData->harmonicWeights[static_cast<size_t>(h)]);
+                maxWeight = std::max(maxWeight, localAlgData->harmonicWeights[static_cast<size_t>(h)]);
         }
 
         // With 512 bins, each bin may be sub-pixel. Render as pixel-width columns.
@@ -483,9 +490,9 @@ private:
             binIdx = juce::jlimit(0, totalBins - 1, binIdx);
 
             float weight;
-            if (algData)
+            if (localAlgData)
             {
-                weight = algData->harmonicWeights[static_cast<size_t>(binIdx)] / maxWeight;
+                weight = localAlgData->harmonicWeights[static_cast<size_t>(binIdx)] / maxWeight;
             }
             else
             {
@@ -563,12 +570,12 @@ private:
 
         // Use exact Lissajous ratios from DSP when available
         float a, b, c, delta;
-        if (algData)
+        if (localAlgData)
         {
-            a = algData->lissA;
-            b = algData->lissB;
-            c = algData->lissC;
-            delta = algData->lissDelta;
+            a = localAlgData->lissA;
+            b = localAlgData->lissB;
+            c = localAlgData->lissC;
+            delta = localAlgData->lissDelta;
         }
         else
         {
@@ -588,9 +595,9 @@ private:
 
         // Compute max contour extent for auto-scaling
         float maxContourR = 0.3f;
-        if (contour && !contour->empty())
+        if (localContour && !localContour->empty())
         {
-            for (auto& pt : *contour)
+            for (auto& pt : *localContour)
             {
                 if (pt.valid)
                     maxContourR = std::max(maxContourR, std::sqrt(pt.x * pt.x + pt.z * pt.z));
@@ -602,13 +609,13 @@ private:
         float visScale = baseScale / std::max(maxExtent, 0.1f);
 
         // Draw shape outline with aligned scale
-        if (contour && !contour->empty())
+        if (localContour && !localContour->empty())
         {
             juce::Path shapePath;
             bool started = false;
-            for (size_t i = 0; i < contour->size(); ++i)
+            for (size_t i = 0; i < localContour->size(); ++i)
             {
-                auto& pt = (*contour)[i];
+                auto& pt = (*localContour)[i];
                 if (!pt.valid) continue;
                 float px = cx + pt.x * visScale;
                 float py = cy - pt.z * visScale;
@@ -664,7 +671,7 @@ private:
         // Animated dot traveling along the path
         float dotT = std::fmod(animPhase * 1.2f, 1.f) * TWO_PI;
         float dotX = cx + std::sin(a * dotT + delta) * r * visScale;
-        float dotZ = cy - std::sin(b * dotT) * r * visScale;
+        float dotScreenY = cy - std::sin(b * dotT) * r * visScale;
         float dotY = std::sin(c * dotT) * r * 0.4f;
 
         // Trail
@@ -684,9 +691,9 @@ private:
         dotYNorm = juce::jlimit(0.f, 1.f, dotYNorm);
         float mainDotSize = 4.f + dotYNorm * 4.f;
         g.setColour(SDFLookAndFeel::tertiaryAccent);
-        g.fillEllipse(dotX - mainDotSize * 0.5f, dotZ - mainDotSize * 0.5f, mainDotSize, mainDotSize);
+        g.fillEllipse(dotX - mainDotSize * 0.5f, dotScreenY - mainDotSize * 0.5f, mainDotSize, mainDotSize);
         g.setColour(SDFLookAndFeel::tertiaryAccent.withAlpha(0.2f));
-        g.fillEllipse(dotX - mainDotSize, dotZ - mainDotSize, mainDotSize * 2.f, mainDotSize * 2.f);
+        g.fillEllipse(dotX - mainDotSize, dotScreenY - mainDotSize, mainDotSize * 2.f, mainDotSize * 2.f);
 
         // Ratio label
         g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.3f));
@@ -697,6 +704,9 @@ private:
 
     std::shared_ptr<const std::vector<ContourPoint>> contour;
     std::shared_ptr<const ScanAlgorithmData> algData;
+    // Thread-safe local copies used during paint() — set via atomic_load at start of paint
+    std::shared_ptr<const std::vector<ContourPoint>> localContour;
+    std::shared_ptr<const ScanAlgorithmData> localAlgData;
     int scanMode = 0;
     float scanHeight = 0.f;
     float topoMorph = 1.f;

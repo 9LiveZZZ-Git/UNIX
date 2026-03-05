@@ -45,7 +45,6 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
         visTab.getSkyboxSelector().setSelectedId(1, juce::dontSendNotification);
         processor.markWavetableDirty();
         presetBrowserBtn.setButtonText("-- Preset --");
-        shapeTab.syncButtonsFromAPVTS();
         updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
     };
     addAndMakeVisible(initBtn);
@@ -61,7 +60,6 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
             abBtn.setButtonText("B");
             abBtn.setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::secondaryAccent);
             applyPresetResources();
-            shapeTab.syncButtonsFromAPVTS();
             updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
         }
         else
@@ -71,7 +69,6 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
             abBtn.setButtonText("A");
             abBtn.setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::mutedText);
             applyPresetResources();
-            shapeTab.syncButtonsFromAPVTS();
             updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
         }
     };
@@ -127,7 +124,6 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
                 {
                     presetManager.loadPreset(file);
                     applyPresetResources();
-                    shapeTab.syncButtonsFromAPVTS();
                     updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
                 }
             });
@@ -817,7 +813,6 @@ void SDFSynthEditor::showPresetMenu()
                 presetManager.loadFactoryPreset(idx);
                 applyPresetResources();
                 presetBrowserBtn.setButtonText(presets[static_cast<size_t>(idx)].name);
-                shapeTab.syncButtonsFromAPVTS();
                 updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
             }
         });

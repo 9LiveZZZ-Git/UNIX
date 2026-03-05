@@ -107,7 +107,7 @@ target_compile_definitions(SDFSynthPlugin
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_REPORT_APP_USAGE=0
-        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_MODAL_LOOPS_PERMITTED=1  # Required for preset FileChooser dialogs
         JUCE_OPENGL=1
 )
 
@@ -262,6 +262,16 @@ add_custom_target(install_sdf_plugin
     DEPENDS SDFSynthPlugin_VST3
     COMMENT "Installing VST3 to ${VST3_INSTALL_DIR}"
 )
+
+if(APPLE)
+    add_custom_target(install_sdf_plugin_au
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_FILE_DIR:SDFSynthPlugin_AU>/../"
+            "${AU_INSTALL_DIR}/SDF Synth.component"
+        DEPENDS SDFSynthPlugin_AU
+        COMMENT "Installing AU to ${AU_INSTALL_DIR}"
+    )
+endif()
 
 # =============================================================================
 # Summary

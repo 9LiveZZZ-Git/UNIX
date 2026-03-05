@@ -502,11 +502,6 @@ juce::String SDFViewport3D::shaderDisplacement()
             return d;
         }
 
-        float sceneClipped(vec3 p) {
-            float shape = sceneDisp(p);
-            float clipPlane = uScanY - p.y;
-            return max(shape, clipPlane);
-        }
     )";
 }
 
@@ -906,8 +901,7 @@ juce::String SDFViewport3D::shaderMain()
                         float ringY = abs(p.y - hy);
                         float ringR = abs(axR - uScanR);
                         float ringDist = sqrt(ringY * ringY + ringR * ringR);
-                        float brightness = 1.0 / sqrt(float(h + 1));
-                        ringSum += exp(-ringDist * 18.0) * brightness;
+                        ringSum += exp(-ringDist * 18.0);
                     }
                     float pulse = 0.9 + 0.1 * sin(uTime * 2.0);
                     col += vec3(0.8, 0.3, 0.9) * ringSum * 0.5 * pulse;
