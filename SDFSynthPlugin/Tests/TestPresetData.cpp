@@ -106,7 +106,7 @@ public:
                 {"scanHeight",      {-0.9f, 0.9f}},
                 {"topoMorph",       {0.f, 1.f}},
                 {"distScale",       {0.5f, 8.f}},
-                {"scanMode",        {0.f, 5.f}},
+                {"scanMode",        {0.f, 4.f}},
                 {"attack",          {0.001f, 2.f}},
                 {"decay",           {0.001f, 2.f}},
                 {"sustain",         {0.f, 1.f}},
@@ -162,7 +162,7 @@ public:
         }
 
         // ── SCAN MODE COVERAGE ─────────────────────────────────────
-        beginTest("All 6 scan modes used across presets");
+        beginTest("All 5 scan modes used across presets");
         {
             std::set<int> modesUsed;
             for (auto& preset : presets)
@@ -170,8 +170,8 @@ public:
                     if (id == "scanMode")
                         modesUsed.insert(static_cast<int>(val));
 
-            expectEquals(static_cast<int>(modesUsed.size()), 6,
-                         "All 6 scan modes (0-5) should appear in factory presets");
+            expectEquals(static_cast<int>(modesUsed.size()), 5,
+                         "All 5 scan modes (0-4) should appear in factory presets");
         }
 
         // ── PHASE 2 FEATURE COVERAGE ──────────────────────────────

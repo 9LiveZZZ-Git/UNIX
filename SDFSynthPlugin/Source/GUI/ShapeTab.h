@@ -60,7 +60,6 @@ public:
         scanModeBox.addItem("Acoustic", 3);
         scanModeBox.addItem("Grain", 4);
         scanModeBox.addItem("Spectral", 5);
-        scanModeBox.addItem("Lissajous", 6);
         setupComboBox(scanModeBox, SDFLookAndFeel::secondaryAccent);
         addAndMakeVisible(scanModeBox);
         scanModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(

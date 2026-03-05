@@ -6,13 +6,18 @@ std::vector<ContourPoint> ContourExtractor::extractContour(const SDFScene3D& sce
 {
     std::vector<ContourPoint> contour(numSamples);
 
+    // Check if origin is outside the shape (needed for hole detection)
+    float originSDF = scene.evaluate(0.f, scanHeight, 0.f);
+    bool originOutside = originSDF >= 0.f;
+
     for (int i = 0; i < numSamples; ++i)
     {
         float theta = (static_cast<float>(i) / numSamples) * sdf::TWO_PI;
         float dirX = std::cos(theta);
         float dirZ = std::sin(theta);
 
-        float prevD = scene.evaluate(0.f, scanHeight, 0.f);
+        float prevD = originSDF;
+        float firstCrossing = -1.f;
         float lastCrossing = -1.f;
 
         for (int s = 1; s <= sdf::CONTOUR_STEPS; ++s)
@@ -50,22 +55,30 @@ std::vector<ContourPoint> ContourExtractor::extractContour(const SDFScene3D& sce
                     }
                 }
                 float finalDenom = dHi - dLo;
-                lastCrossing = (std::abs(finalDenom) > 1e-10f)
+                float crossing = (std::abs(finalDenom) > 1e-10f)
                     ? rLo - dLo * (rHi - rLo) / finalDenom
                     : (rLo + rHi) * 0.5f;
+
+                if (firstCrossing < 0.f) firstCrossing = crossing;
+                lastCrossing = crossing;
             }
             prevD = d;
         }
 
         if (lastCrossing >= 0.f)
         {
+            // Inner radius: only meaningful when origin is outside (hole visible)
+            // and first crossing is significantly closer than outer crossing
+            float inner = (originOutside && firstCrossing >= 0.f && firstCrossing < lastCrossing * 0.9f)
+                          ? firstCrossing : -1.f;
             contour[i] = { theta, lastCrossing, true,
                            std::cos(theta) * lastCrossing,
-                           std::sin(theta) * lastCrossing };
+                           std::sin(theta) * lastCrossing,
+                           inner };
         }
         else
         {
-            contour[i] = { theta, 0.f, false, 0.f, 0.f };
+            contour[i] = { theta, 0.f, false, 0.f, 0.f, -1.f };
         }
     }
 
