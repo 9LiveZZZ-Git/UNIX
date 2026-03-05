@@ -60,7 +60,6 @@ public:
         scanModeBox.addItem("Acoustic", 3);
         scanModeBox.addItem("Grain", 4);
         scanModeBox.addItem("Spectral", 5);
-        scanModeBox.addItem("Lissajous", 6);
         setupComboBox(scanModeBox, SDFLookAndFeel::secondaryAccent);
         addAndMakeVisible(scanModeBox);
         scanModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -133,17 +132,9 @@ public:
         }
         bounds.removeFromTop(pad);
 
-        // Scan mode: label + combo (moved up, before scene knobs)
-        {
-            auto row = bounds.removeFromTop(comboH);
-            scanLabel.setBounds(row.removeFromLeft(labelW));
-            scanModeBox.setBounds(row);
-        }
-        bounds.removeFromTop(pad);
-
-        // Remaining height split evenly into 4 knob rows
+        // Remaining height split into scene knobs, scan combo, scan knobs, SF row
         int remaining = bounds.getHeight();
-        int knobRowH = juce::jmax(SDFLookAndFeel::scaledInt(48), remaining / 4);
+        int knobRowH = juce::jmax(SDFLookAndFeel::scaledInt(48), (remaining - comboH - pad) / 4);
 
         // Row 1: Scene knobs (SizeA, SizeB, OffX)
         {
@@ -162,6 +153,14 @@ public:
             smoothKKnob.setBounds(row.removeFromLeft(kw));
             twistKnob.setBounds(row);
         }
+
+        // Scan mode: label + combo (in scan section)
+        {
+            auto row = bounds.removeFromTop(comboH);
+            scanLabel.setBounds(row.removeFromLeft(labelW));
+            scanModeBox.setBounds(row);
+        }
+        bounds.removeFromTop(pad);
 
         // Row 3: Scan knobs (Radius, Height, MRI, Scale)
         {

@@ -119,8 +119,6 @@ WavetableGenerator::Wavetable WavetableGenerator::generateWithMode(
             return generateGranularCurvature(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::VolumetricSpectro:
             return generateVolumetricSpectro(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
-        case ScanMode::FieldTraverse:
-            return generateFieldTraverse(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::Contour:
         default:
             return generate(scene, contour, scanRadius, scanHeight,
@@ -604,86 +602,6 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
 
         table[i] = sum;
     }
-
-    removeDCAndNormalize(table);
-
-    return table;
-}
-
-// ── Mode 5: Field Traversal ────────────────────────────────────────
-// FIX: Crossfade loop point to eliminate click from non-closing Lissajous curves
-
-WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
-    const SDFScene3D& scene,
-    float scanRadius, float scanHeight, float topoMorph, float distScale,
-    ScanAlgorithmData* outAlgData)
-{
-    const int n = sdf::TABLE_SIZE;
-
-    // Lissajous ratios morph with topoMorph (piecewise formula)
-    float a, b, c, delta;
-    if (topoMorph < 0.5f)
-    {
-        float t = topoMorph * 2.f;
-        a = 1.f;
-        b = 1.f + t;
-        c = t * 1.5f;
-        delta = t * 0.5f;
-    }
-    else
-    {
-        float t = (topoMorph - 0.5f) * 2.f;
-        a = 1.f + t;
-        b = 2.f + t;
-        c = 1.5f + t * 3.5f;
-        delta = 0.5f + t * 1.f;
-    }
-
-    // Export algorithm data
-    if (outAlgData)
-    {
-        outAlgData->lissA = a;
-        outAlgData->lissB = b;
-        outAlgData->lissC = c;
-        outAlgData->lissDelta = delta;
-    }
-
-    // Phase 4e: adaptive oversampling — higher ratios need more samples
-    int osRate = sdf::FIELD_PATH_OVERSAMPLE + static_cast<int>(std::ceil(std::max({a, b, c}) / 2.f));
-    osRate = std::min(osRate, 12); // cap to avoid huge allocations
-    const int overN = n * osRate;
-
-    // Oversample: evaluate SDF along 3D Lissajous path
-    std::vector<float> oversampled(static_cast<size_t>(overN));
-    for (int i = 0; i < overN; ++i)
-    {
-        float t = (static_cast<float>(i) / overN) * sdf::TWO_PI;
-        float px = std::sin(a * t + delta) * scanRadius;
-        float pz = std::sin(b * t) * scanRadius;
-        float py = scanHeight + std::sin(c * t) * scanRadius * 0.4f;
-
-        float d = scene.evaluate(px, py, pz);
-        oversampled[static_cast<size_t>(i)] = std::tanh(d * distScale);
-    }
-
-    // Decimate with triangular (Bartlett) window for better anti-aliasing than box
-    Wavetable table{};
-    for (int i = 0; i < n; ++i)
-    {
-        float sum = 0.f;
-        float wSum = 0.f;
-        int base = i * osRate;
-        for (int j = 0; j < osRate; ++j)
-        {
-            // Triangular weight: peak at center of the window
-            float w = 1.f - std::abs(2.f * j - (osRate - 1)) / static_cast<float>(osRate);
-            sum += oversampled[static_cast<size_t>(base + j)] * w;
-            wSum += w;
-        }
-        table[i] = sum / wSum;
-    }
-
-    crossfadeLoopPoint(table, sdf::FIELD_CROSSFADE_LEN);
 
     removeDCAndNormalize(table);
 

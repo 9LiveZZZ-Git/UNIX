@@ -7,10 +7,11 @@
 struct ContourPoint
 {
     float theta = 0.f;
-    float r = 0.f;
+    float r = 0.f;        // outermost surface crossing radius
     bool valid = false;
-    float x = 0.f;
-    float z = 0.f;
+    float x = 0.f;        // cos(theta) * r
+    float z = 0.f;        // sin(theta) * r
+    float innerR = -1.f;  // first crossing radius when origin is outside (hole detection), -1 if no hole
 };
 
 class ContourExtractor

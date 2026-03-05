@@ -17,9 +17,6 @@ struct MipMappedWavetable;
 // Metadata exported from wavetable generation for accurate overlay visualization
 struct ScanAlgorithmData
 {
-    // Traverse (Mode 5): exact Lissajous ratios from DSP
-    float lissA = 1.f, lissB = 1.f, lissC = 0.f, lissDelta = 0.f;
-
     // RayMarch (Mode 1)
     int numRays = 1;
     float maxRange = 1.f;
@@ -81,10 +78,6 @@ private:
     static Wavetable generateVolumetricSpectro(const SDFScene3D& scene,
         float scanRadius, float scanHeight, float topoMorph, float distScale,
         ScanAlgorithmData* outAlgData = nullptr);
-    static Wavetable generateFieldTraverse(const SDFScene3D& scene,
-        float scanRadius, float scanHeight, float topoMorph, float distScale,
-        ScanAlgorithmData* outAlgData = nullptr);
-
     // Simple radix-2 FFT helpers
     static void fft(std::vector<std::complex<float>>& data, bool inverse);
 };

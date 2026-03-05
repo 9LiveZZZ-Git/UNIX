@@ -104,7 +104,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SDFSynthProcessor::createPar
 
     // Scan mode
     params.push_back(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID("scanMode", 1), "Scan Mode",
-        juce::StringArray{ "Contour", "Ray March", "Acoustic", "Granular", "Spectral", "Traverse" }, 0));
+        juce::StringArray{ "Contour", "Ray March", "Acoustic", "Granular", "Spectral" }, 0));
 
     // ADSR
     params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("attack", 1), "Attack",
@@ -158,7 +158,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SDFSynthProcessor::createPar
     params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("oscBFine", 1), "Osc B Fine",
         juce::NormalisableRange<float>(-100.f, 100.f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID("oscBScanMode", 1), "Osc B Scan",
-        juce::StringArray{ "Contour", "Ray March", "Acoustic", "Granular", "Spectral", "Traverse" }, 0));
+        juce::StringArray{ "Contour", "Ray March", "Acoustic", "Granular", "Spectral" }, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("oscBScanHeight", 1), "Osc B Height",
         juce::NormalisableRange<float>(-0.9f, 0.9f, 0.01f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID("oscBMixMode", 1), "Osc B Mix",
@@ -967,6 +967,7 @@ void SDFSynthProcessor::rebuildWavetable()
 
     const TextureSlot* dSlot = texSystem ? &texSystem->dispTex : nullptr;
     const TextureSlot* eSlot = texSystem ? &texSystem->emitTex : nullptr;
+    auto syncAlgData = std::make_shared<ScanAlgorithmData>();
     currentWavetable = WavetableGenerator::generateWithMode(
         mode, scene, *currentContour,
         apvts.getRawParameterValue("scanRadius")->load(),
@@ -975,7 +976,9 @@ void SDFSynthProcessor::rebuildWavetable()
         apvts.getRawParameterValue("distScale")->load(),
         dSlot, apvts.getRawParameterValue("dispAmt")->load(),
         eSlot, apvts.getRawParameterValue("emIntensity")->load(),
-        apvts.getRawParameterValue("texScale")->load());
+        apvts.getRawParameterValue("texScale")->load(),
+        syncAlgData.get());
+    currentAlgData = syncAlgData;
 
     auto mipTable = std::make_shared<const MipMappedWavetable>(
         WavetableGenerator::generateMipMap(currentWavetable));

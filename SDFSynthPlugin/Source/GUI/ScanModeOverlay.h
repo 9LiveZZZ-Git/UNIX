@@ -47,8 +47,8 @@ public:
         auto area = bounds.reduced(4.f);
 
         // Mode label
-        static const char* modeNames[] = { "CONTOUR", "MARCH", "ACOUSTIC", "GRAIN", "SPECTRAL", "LISSAJOUS" };
-        int m = juce::jlimit(0, 5, scanMode);
+        static const char* modeNames[] = { "CONTOUR", "MARCH", "ACOUSTIC", "GRAIN", "SPECTRAL" };
+        int m = juce::jlimit(0, 4, scanMode);
         g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.6f));
         g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), SDFLookAndFeel::scaled(8.f), juce::Font::bold));
         g.drawText(modeNames[m], area.removeFromTop(10.f), juce::Justification::centred);
@@ -61,7 +61,6 @@ public:
             case 2: drawAcousticMode(g, area); break;
             case 3: drawGrainMode(g, area); break;
             case 4: drawSpectralMode(g, area); break;
-            case 5: drawTraverseMode(g, area); break;
         }
 
         localContour.reset();
@@ -73,15 +72,34 @@ private:
     static constexpr float TWO_PI = 6.28318530f;
 
     // --- Helpers ---
-    void drawShapeOutline(juce::Graphics& g, juce::Rectangle<float> area, float alpha = 0.5f) const
+
+    // Compute max contour radius for auto-scaling
+    float getMaxContourR() const
+    {
+        float maxR = 0.01f;
+        if (localContour && !localContour->empty())
+            for (auto& pt : *localContour)
+                if (pt.valid) maxR = std::max(maxR, pt.r);
+        return maxR;
+    }
+
+    // Auto-scale factor that fits contour (and optional extra extent) inside the overlay
+    float computeAutoScale(juce::Rectangle<float> area, float extraExtent = 0.f) const
+    {
+        float maxR = std::max(getMaxContourR(), extraExtent);
+        float baseScale = juce::jmin(area.getWidth(), area.getHeight()) * 0.42f;
+        return baseScale / std::max(maxR, 0.1f);
+    }
+
+    void drawShapeOutline(juce::Graphics& g, juce::Rectangle<float> area, float alpha, float scale) const
     {
         if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
-        juce::Path path;
+        // Outer boundary path
+        juce::Path outerPath;
         bool started = false;
         for (size_t i = 0; i < localContour->size(); ++i)
         {
@@ -89,15 +107,55 @@ private:
             if (!pt.valid) continue;
             float px = cx + pt.x * scale;
             float py = cy - pt.z * scale;
-            if (!started) { path.startNewSubPath(px, py); started = true; }
-            else path.lineTo(px, py);
+            if (!started) { outerPath.startNewSubPath(px, py); started = true; }
+            else outerPath.lineTo(px, py);
         }
-        path.closeSubPath();
+        outerPath.closeSubPath();
 
-        g.setColour(juce::Colour(0x1900ffff));
-        g.fillPath(path);
-        g.setColour(SDFLookAndFeel::primaryAccent.withAlpha(alpha));
-        g.strokePath(path, juce::PathStrokeType(1.f));
+        // Check for inner boundary (hole) — e.g. torus, subtracted shapes
+        bool hasHole = false;
+        for (size_t i = 0; i < localContour->size(); ++i)
+            if ((*localContour)[i].valid && (*localContour)[i].innerR > 0.f)
+            { hasHole = true; break; }
+
+        if (hasHole)
+        {
+            // Build combined path with even-odd fill to cut out hole
+            juce::Path combined;
+            combined.setUsingNonZeroWinding(false); // even-odd rule
+            combined.addPath(outerPath);
+
+            // Inner boundary from innerR values
+            juce::Path innerPath;
+            bool innerStarted = false;
+            for (size_t i = 0; i < localContour->size(); ++i)
+            {
+                auto& pt = (*localContour)[i];
+                if (!pt.valid || pt.innerR <= 0.f) continue;
+                float px = cx + std::cos(pt.theta) * pt.innerR * scale;
+                float py = cy - std::sin(pt.theta) * pt.innerR * scale;
+                if (!innerStarted) { innerPath.startNewSubPath(px, py); innerStarted = true; }
+                else innerPath.lineTo(px, py);
+            }
+            innerPath.closeSubPath();
+            combined.addPath(innerPath);
+
+            g.setColour(juce::Colour(0x1900ffff));
+            g.fillPath(combined);
+
+            // Stroke both boundaries
+            g.setColour(SDFLookAndFeel::primaryAccent.withAlpha(alpha));
+            g.strokePath(outerPath, juce::PathStrokeType(1.f));
+            g.setColour(SDFLookAndFeel::primaryAccent.withAlpha(alpha * 0.6f));
+            g.strokePath(innerPath, juce::PathStrokeType(0.75f));
+        }
+        else
+        {
+            g.setColour(juce::Colour(0x1900ffff));
+            g.fillPath(outerPath);
+            g.setColour(SDFLookAndFeel::primaryAccent.withAlpha(alpha));
+            g.strokePath(outerPath, juce::PathStrokeType(1.f));
+        }
     }
 
     float getContourRadius(float angle) const
@@ -114,12 +172,12 @@ private:
     // --- Mode 0: Contour cross-section with topoMorph blend indicator ---
     void drawContourMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.6f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.6f, scale);
         if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Draw faint radial lines
         g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.1f));
@@ -171,15 +229,16 @@ private:
     // --- Mode 1: Ray March with SDF proximity coloring ---
     void drawMarchMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
-
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact values from DSP when available
         int numRays = localAlgData ? localAlgData->numRays : (1 + static_cast<int>(topoMorph * 7.f));
         float maxRange = localAlgData ? localAlgData->maxRange : (scanRadius * 2.f);
+
+        float scale = computeAutoScale(area, maxRange);
+        drawShapeOutline(g, area, 0.3f, scale);
+
         float goldenAngle = 2.39996322f;
 
         // Adaptive Tukey taper matching DSP
@@ -192,8 +251,8 @@ private:
         int activeRay = static_cast<int>(activeRayF);
         float marchFrac = activeRayF - activeRay;
 
-        // Visual max range scaled to area
-        float maxR = juce::jmin(maxRange / scanRadius, 2.f) * scale * 0.5f;
+        // Ray max distance in overlay pixels
+        float maxR = maxRange * scale;
 
         for (int i = 0; i < numRays; ++i)
         {
@@ -275,11 +334,11 @@ private:
     // --- Mode 2: Acoustic bouncing with multi-ray + energy visualization ---
     void drawAcousticMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.3f, scale);
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         int maxBounces = localAlgData ? localAlgData->maxBounces : (1 + static_cast<int>(std::floor(topoMorph * 5.f)));
 
@@ -363,11 +422,11 @@ private:
     // --- Mode 3: Granular with accurate grain count + freq visualization ---
     void drawGrainMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.3f, scale);
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact DSP values when available
         int numGrains = localAlgData ? localAlgData->numGrains
@@ -460,7 +519,8 @@ private:
     void drawSpectralMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         constexpr int totalBins = sdf::SPECTRO_HEIGHT_SLICES;
-        int activeBins = localAlgData ? localAlgData->activeBins
+        bool hasSpectralData = localAlgData && localAlgData->activeBins > 0;
+        int activeBins = hasSpectralData ? localAlgData->activeBins
                                  : (8 + static_cast<int>(topoMorph * static_cast<float>(totalBins - 8)));
         activeBins = juce::jlimit(1, totalBins, activeBins);
 
@@ -473,7 +533,7 @@ private:
 
         // Find max weight for normalization
         float maxWeight = 0.01f;
-        if (localAlgData)
+        if (hasSpectralData)
         {
             for (int h = 0; h < totalBins; ++h)
                 maxWeight = std::max(maxWeight, localAlgData->harmonicWeights[static_cast<size_t>(h)]);
@@ -490,7 +550,7 @@ private:
             binIdx = juce::jlimit(0, totalBins - 1, binIdx);
 
             float weight;
-            if (localAlgData)
+            if (hasSpectralData)
             {
                 weight = localAlgData->harmonicWeights[static_cast<size_t>(binIdx)] / maxWeight;
             }
@@ -559,147 +619,6 @@ private:
         g.drawText("HEIGHT SLICES", area.getX(), area.getY(), area.getWidth(), 8.f, juce::Justification::centredRight);
         g.drawText(juce::String(activeBins) + "/" + juce::String(totalBins),
                    area.removeFromBottom(8.f), juce::Justification::centredLeft);
-    }
-
-    // --- Mode 5: Lissajous traverse with exact DSP ratios + Y-dimension ---
-    void drawTraverseMode(juce::Graphics& g, juce::Rectangle<float> area) const
-    {
-        float cx = area.getCentreX();
-        float cy = area.getCentreY();
-        float baseScale = juce::jmin(area.getWidth(), area.getHeight()) * 0.42f;
-
-        // Use exact Lissajous ratios from DSP when available
-        float a, b, c, delta;
-        if (localAlgData)
-        {
-            a = localAlgData->lissA;
-            b = localAlgData->lissB;
-            c = localAlgData->lissC;
-            delta = localAlgData->lissDelta;
-        }
-        else
-        {
-            if (topoMorph < 0.5f)
-            {
-                float t = topoMorph * 2.f;
-                a = 1.f; b = 1.f + t; c = t * 1.5f; delta = t * 0.5f;
-            }
-            else
-            {
-                float t = (topoMorph - 0.5f) * 2.f;
-                a = 1.f + t; b = 2.f + t; c = 1.5f + t * 3.5f; delta = 0.5f + t * 1.f;
-            }
-        }
-
-        float r = scanRadius;
-
-        // Compute max contour extent for auto-scaling
-        float maxContourR = 0.3f;
-        if (localContour && !localContour->empty())
-        {
-            for (auto& pt : *localContour)
-            {
-                if (pt.valid)
-                    maxContourR = std::max(maxContourR, std::sqrt(pt.x * pt.x + pt.z * pt.z));
-            }
-        }
-
-        // Auto-scale: fit both shape outline and Lissajous to overlay
-        float maxExtent = std::max(maxContourR, r);
-        float visScale = baseScale / std::max(maxExtent, 0.1f);
-
-        // Draw shape outline with aligned scale
-        if (localContour && !localContour->empty())
-        {
-            juce::Path shapePath;
-            bool started = false;
-            for (size_t i = 0; i < localContour->size(); ++i)
-            {
-                auto& pt = (*localContour)[i];
-                if (!pt.valid) continue;
-                float px = cx + pt.x * visScale;
-                float py = cy - pt.z * visScale;
-                if (!started) { shapePath.startNewSubPath(px, py); started = true; }
-                else shapePath.lineTo(px, py);
-            }
-            shapePath.closeSubPath();
-            g.setColour(juce::Colour(0x1900ffff));
-            g.fillPath(shapePath);
-            g.setColour(SDFLookAndFeel::primaryAccent.withAlpha(0.2f));
-            g.strokePath(shapePath, juce::PathStrokeType(1.f));
-        }
-
-        // Draw the full Lissajous path with Y-dimension encoded as brightness
-        juce::Path lissPath;
-        int steps = 256;
-        for (int i = 0; i < steps; ++i)
-        {
-            float t = static_cast<float>(i) / steps * TWO_PI;
-            float x = std::sin(a * t + delta) * r;
-            float z = std::sin(b * t) * r;
-            float px = cx + x * visScale;
-            float py = cy - z * visScale;
-            if (i == 0) lissPath.startNewSubPath(px, py);
-            else lissPath.lineTo(px, py);
-        }
-        lissPath.closeSubPath();
-
-        g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.08f));
-        g.fillPath(lissPath);
-
-        // Draw path segments with Y-height encoded as color brightness
-        for (int i = 0; i < steps; ++i)
-        {
-            float t0 = static_cast<float>(i) / steps * TWO_PI;
-            float t1 = static_cast<float>(i + 1) / steps * TWO_PI;
-            float x0 = std::sin(a * t0 + delta) * r;
-            float z0 = std::sin(b * t0) * r;
-            float y0 = std::sin(c * t0) * r * 0.4f;
-            float x1 = std::sin(a * t1 + delta) * r;
-            float z1 = std::sin(b * t1) * r;
-
-            float yNorm = (y0 + r * 0.4f) / (r * 0.8f + 0.001f);
-            yNorm = juce::jlimit(0.f, 1.f, yNorm);
-            float alpha = 0.2f + yNorm * 0.5f;
-            float thick = 0.5f + yNorm * 1.f;
-
-            g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(alpha));
-            g.drawLine(cx + x0 * visScale, cy - z0 * visScale,
-                       cx + x1 * visScale, cy - z1 * visScale, thick);
-        }
-
-        // Animated dot traveling along the path
-        float dotT = std::fmod(animPhase * 1.2f, 1.f) * TWO_PI;
-        float dotX = cx + std::sin(a * dotT + delta) * r * visScale;
-        float dotScreenY = cy - std::sin(b * dotT) * r * visScale;
-        float dotY = std::sin(c * dotT) * r * 0.4f;
-
-        // Trail
-        for (int t = 8; t >= 1; --t)
-        {
-            float trailT = dotT - static_cast<float>(t) * 0.04f;
-            float tx = cx + std::sin(a * trailT + delta) * r * visScale;
-            float ty = cy - std::sin(b * trailT) * r * visScale;
-            float trailAlpha = (1.f - static_cast<float>(t) / 9.f) * 0.4f;
-            float trailSize = 2.f + (1.f - static_cast<float>(t) / 9.f) * 2.f;
-            g.setColour(SDFLookAndFeel::tertiaryAccent.withAlpha(trailAlpha));
-            g.fillEllipse(tx - trailSize * 0.5f, ty - trailSize * 0.5f, trailSize, trailSize);
-        }
-
-        // Main dot — size encodes Y height
-        float dotYNorm = (dotY + r * 0.4f) / (r * 0.8f + 0.001f);
-        dotYNorm = juce::jlimit(0.f, 1.f, dotYNorm);
-        float mainDotSize = 4.f + dotYNorm * 4.f;
-        g.setColour(SDFLookAndFeel::tertiaryAccent);
-        g.fillEllipse(dotX - mainDotSize * 0.5f, dotScreenY - mainDotSize * 0.5f, mainDotSize, mainDotSize);
-        g.setColour(SDFLookAndFeel::tertiaryAccent.withAlpha(0.2f));
-        g.fillEllipse(dotX - mainDotSize, dotScreenY - mainDotSize, mainDotSize * 2.f, mainDotSize * 2.f);
-
-        // Ratio label
-        g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.3f));
-        g.setFont(juce::Font(juce::Font::getDefaultSansSerifFontName(), SDFLookAndFeel::scaled(6.f), 0));
-        g.drawText(juce::String(a, 1) + ":" + juce::String(b, 1) + ":" + juce::String(c, 1),
-                   area.removeFromBottom(8.f), juce::Justification::centred);
     }
 
     std::shared_ptr<const std::vector<ContourPoint>> contour;
