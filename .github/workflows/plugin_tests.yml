@@ -1,0 +1,273 @@
+# =============================================================================
+# UNIX Audio Plugins - CI Test Pipeline
+# =============================================================================
+#
+# Builds and tests both plugins:
+# - Karplus-Strong string synthesizer
+# - SDF Synth (3D SDF wavetable synthesizer)
+#
+# Triggers on push to main/dev and all pull requests.
+
+name: Plugin Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # ===========================================================================
+  # Build Karplus-Strong
+  # ===========================================================================
+  build-karplus:
+    name: Karplus-Strong (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxcomposite-dev \
+            libxrender-dev \
+            libgl1-mesa-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DBUILD_TESTS=ON
+        working-directory: KarplusStrongPlugin
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+        working-directory: KarplusStrongPlugin
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: karplus-vst3-${{ matrix.os }}
+          path: KarplusStrongPlugin/build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          if-no-files-found: warn
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: karplus-standalone-${{ matrix.os }}
+          path: KarplusStrongPlugin/build/KarplusStrongPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Build SDF Synth
+  # ===========================================================================
+  build-sdf:
+    name: SDF Synth (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxcomposite-dev \
+            libxrender-dev \
+            libgl1-mesa-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        working-directory: SDFSynthPlugin
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+        working-directory: SDFSynthPlugin
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ./build/SDFSynthTests_artefacts/${{ env.BUILD_TYPE }}/SDFSynthTests.exe
+          else
+            ./build/SDFSynthTests_artefacts/${{ env.BUILD_TYPE }}/SDFSynthTests
+          fi
+        working-directory: SDFSynthPlugin
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdf-vst3-${{ matrix.os }}
+          path: SDFSynthPlugin/build/SDFSynthPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          if-no-files-found: warn
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdf-standalone-${{ matrix.os }}
+          path: SDFSynthPlugin/build/SDFSynthPlugin_artefacts/${{ env.BUILD_TYPE }}/Standalone/
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Pluginval Validation
+  # ===========================================================================
+  validation:
+    name: Validate (${{ matrix.plugin }}, ${{ matrix.os }})
+    needs: [build-karplus, build-sdf]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        plugin: [karplus, sdf]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download plugin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}-vst3-${{ matrix.os }}
+          path: plugin
+
+      - name: Install pluginval (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          curl -L https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip -o pluginval.zip
+          unzip pluginval.zip
+          chmod +x pluginval
+
+      - name: Install pluginval (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -L https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip -o pluginval.zip
+          unzip pluginval.zip
+
+      - name: Install pluginval (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath .
+
+      - name: Find VST3
+        id: find-vst3
+        shell: bash
+        run: |
+          VST3=$(find plugin -name "*.vst3" -type d | head -1)
+          echo "vst3_path=$VST3" >> $GITHUB_OUTPUT
+          echo "Found VST3: $VST3"
+
+      - name: Run pluginval (Level 5)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            ./pluginval.exe --strictness-level 5 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
+          else
+            xvfb-run ./pluginval --strictness-level 5 --validate "${{ steps.find-vst3.outputs.vst3_path }}"
+          fi
+
+  # ===========================================================================
+  # Python Tests (Karplus-Strong specific)
+  # ===========================================================================
+  python-tests:
+    name: Python Tests (${{ matrix.os }})
+    needs: build-karplus
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Download plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: karplus-vst3-${{ matrix.os }}
+          path: build/KarplusStrongPlugin_artefacts/Release/VST3
+
+      - name: Install test dependencies
+        run: pip install -r tests/requirements.txt
+
+      - name: Run validation tests
+        run: pytest tests/validation -v --tb=short -m "not slow"
+
+      - name: Run audio quality tests
+        run: pytest tests/audio_quality -v --tb=short -m "not slow"
+        continue-on-error: true
+
+      - name: Run MIDI tests
+        run: pytest tests/midi -v --tb=short -m "not slow"
+        continue-on-error: true
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  summary:
+    name: Test Summary
+    needs: [build-karplus, build-sdf, validation, python-tests]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Results
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Karplus-Strong Build | ${{ needs.build-karplus.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SDF Synth Build | ${{ needs.build-sdf.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pluginval Validation | ${{ needs.validation.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Tests | ${{ needs.python-tests.result }} |" >> $GITHUB_STEP_SUMMARY

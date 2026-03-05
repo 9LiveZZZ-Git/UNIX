@@ -1,16 +1,17 @@
-cmake_minimum_required(VERSION 4.1)
-project(UNIX)
+cmake_minimum_required(VERSION 3.15)
+project(UNIX VERSION 1.0.0)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(wav-write wav-write.cpp)
-add_executable(wav-read wav-read.cpp)
-add_executable(sine-sweep sine-sweep.cpp)
+# =============================================================================
+# Options
+# =============================================================================
+option(BUILD_TESTS "Build test targets" OFF)
 
-## Add lines here to make new executable targets
-add_executable(impulse-sweep impulse-sweep.cpp)
-
-add_executable(impulse impulse.cpp)
-add_executable(phasor phasor.cpp)
+# =============================================================================
+# Plugin Targets
+# =============================================================================
+add_subdirectory(KarplusStrongPlugin)
+add_subdirectory(SDFSynthPlugin)
