@@ -73,13 +73,31 @@ private:
     static constexpr float TWO_PI = 6.28318530f;
 
     // --- Helpers ---
-    void drawShapeOutline(juce::Graphics& g, juce::Rectangle<float> area, float alpha = 0.5f) const
+
+    // Compute max contour radius for auto-scaling
+    float getMaxContourR() const
+    {
+        float maxR = 0.01f;
+        if (localContour && !localContour->empty())
+            for (auto& pt : *localContour)
+                if (pt.valid) maxR = std::max(maxR, pt.r);
+        return maxR;
+    }
+
+    // Auto-scale factor that fits contour (and optional extra extent) inside the overlay
+    float computeAutoScale(juce::Rectangle<float> area, float extraExtent = 0.f) const
+    {
+        float maxR = std::max(getMaxContourR(), extraExtent);
+        float baseScale = juce::jmin(area.getWidth(), area.getHeight()) * 0.42f;
+        return baseScale / std::max(maxR, 0.1f);
+    }
+
+    void drawShapeOutline(juce::Graphics& g, juce::Rectangle<float> area, float alpha, float scale) const
     {
         if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         juce::Path path;
         bool started = false;
@@ -114,12 +132,12 @@ private:
     // --- Mode 0: Contour cross-section with topoMorph blend indicator ---
     void drawContourMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.6f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.6f, scale);
         if (!localContour || localContour->empty()) return;
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Draw faint radial lines
         g.setColour(SDFLookAndFeel::secondaryAccent.withAlpha(0.1f));
@@ -171,15 +189,16 @@ private:
     // --- Mode 1: Ray March with SDF proximity coloring ---
     void drawMarchMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
-
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact values from DSP when available
         int numRays = localAlgData ? localAlgData->numRays : (1 + static_cast<int>(topoMorph * 7.f));
         float maxRange = localAlgData ? localAlgData->maxRange : (scanRadius * 2.f);
+
+        float scale = computeAutoScale(area, maxRange);
+        drawShapeOutline(g, area, 0.3f, scale);
+
         float goldenAngle = 2.39996322f;
 
         // Adaptive Tukey taper matching DSP
@@ -192,8 +211,8 @@ private:
         int activeRay = static_cast<int>(activeRayF);
         float marchFrac = activeRayF - activeRay;
 
-        // Visual max range scaled to area
-        float maxR = juce::jmin(maxRange / scanRadius, 2.f) * scale * 0.5f;
+        // Ray max distance in overlay pixels
+        float maxR = maxRange * scale;
 
         for (int i = 0; i < numRays; ++i)
         {
@@ -275,11 +294,11 @@ private:
     // --- Mode 2: Acoustic bouncing with multi-ray + energy visualization ---
     void drawAcousticMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.3f, scale);
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         int maxBounces = localAlgData ? localAlgData->maxBounces : (1 + static_cast<int>(std::floor(topoMorph * 5.f)));
 
@@ -363,11 +382,11 @@ private:
     // --- Mode 3: Granular with accurate grain count + freq visualization ---
     void drawGrainMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        drawShapeOutline(g, area, 0.3f);
+        float scale = computeAutoScale(area);
+        drawShapeOutline(g, area, 0.3f, scale);
 
         float cx = area.getCentreX();
         float cy = area.getCentreY();
-        float scale = juce::jmin(area.getWidth(), area.getHeight()) * 0.32f;
 
         // Use exact DSP values when available
         int numGrains = localAlgData ? localAlgData->numGrains
@@ -460,7 +479,8 @@ private:
     void drawSpectralMode(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         constexpr int totalBins = sdf::SPECTRO_HEIGHT_SLICES;
-        int activeBins = localAlgData ? localAlgData->activeBins
+        bool hasSpectralData = localAlgData && localAlgData->activeBins > 0;
+        int activeBins = hasSpectralData ? localAlgData->activeBins
                                  : (8 + static_cast<int>(topoMorph * static_cast<float>(totalBins - 8)));
         activeBins = juce::jlimit(1, totalBins, activeBins);
 
@@ -473,7 +493,7 @@ private:
 
         // Find max weight for normalization
         float maxWeight = 0.01f;
-        if (localAlgData)
+        if (hasSpectralData)
         {
             for (int h = 0; h < totalBins; ++h)
                 maxWeight = std::max(maxWeight, localAlgData->harmonicWeights[static_cast<size_t>(h)]);
@@ -490,7 +510,7 @@ private:
             binIdx = juce::jlimit(0, totalBins - 1, binIdx);
 
             float weight;
-            if (localAlgData)
+            if (hasSpectralData)
             {
                 weight = localAlgData->harmonicWeights[static_cast<size_t>(binIdx)] / maxWeight;
             }

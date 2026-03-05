@@ -967,6 +967,7 @@ void SDFSynthProcessor::rebuildWavetable()
 
     const TextureSlot* dSlot = texSystem ? &texSystem->dispTex : nullptr;
     const TextureSlot* eSlot = texSystem ? &texSystem->emitTex : nullptr;
+    auto syncAlgData = std::make_shared<ScanAlgorithmData>();
     currentWavetable = WavetableGenerator::generateWithMode(
         mode, scene, *currentContour,
         apvts.getRawParameterValue("scanRadius")->load(),
@@ -975,7 +976,9 @@ void SDFSynthProcessor::rebuildWavetable()
         apvts.getRawParameterValue("distScale")->load(),
         dSlot, apvts.getRawParameterValue("dispAmt")->load(),
         eSlot, apvts.getRawParameterValue("emIntensity")->load(),
-        apvts.getRawParameterValue("texScale")->load());
+        apvts.getRawParameterValue("texScale")->load(),
+        syncAlgData.get());
+    currentAlgData = syncAlgData;
 
     auto mipTable = std::make_shared<const MipMappedWavetable>(
         WavetableGenerator::generateMipMap(currentWavetable));
