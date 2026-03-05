@@ -4,6 +4,7 @@
 SDFViewport3D::SDFViewport3D(juce::AudioProcessorValueTreeState& a)
     : apvts(a)
 {
+    openGLContext.setOpenGLVersionRequired(juce::OpenGLContext::openGL3_2);
     openGLContext.setRenderer(this);
     openGLContext.setContinuousRepainting(false);
     openGLContext.attachTo(*this);
@@ -382,10 +383,12 @@ juce::String SDFViewport3D::shaderSdfPrimitives()
             float phi = atan(p.z, p.x);
             float a1 = abs(cos(m * theta / 4.0));
             float b1 = abs(sin(m * theta / 4.0));
-            float r1 = pow(pow(a1, n2) + pow(b1, n3), -1.0/n1);
+            float v1 = pow(a1, n2) + pow(b1, n3);
+            float r1 = (n1 > 0.001 && v1 > 1e-10) ? pow(v1, -1.0/n1) : 1e5;
             float a2 = abs(cos(m * phi / 4.0));
             float b2 = abs(sin(m * phi / 4.0));
-            float r2 = pow(pow(a2, n2) + pow(b2, n3), -1.0/n1);
+            float v2 = pow(a2, n2) + pow(b2, n3);
+            float r2 = (n1 > 0.001 && v2 > 1e-10) ? pow(v2, -1.0/n1) : 1e5;
             return r - r1 * r2 * scale;
         }
 
@@ -449,7 +452,7 @@ juce::String SDFViewport3D::shaderScene()
 
         float scene(vec3 p) {
             vec3 q = p;
-            if (uTw > 0.01) {
+            if (abs(uTw) > 0.005) {
                 float c = cos(uTw * q.y), s = sin(uTw * q.y);
                 q.xz = mat2(c, -s, s, c) * q.xz;
             }
@@ -591,8 +594,8 @@ juce::String SDFViewport3D::shaderSkybox()
         vec2 equirectUV(vec3 rd) {
             float phi = atan(rd.z, rd.x);
             float theta = asin(clamp(rd.y, -1.0, 1.0));
-            return vec2(phi / (2.0 * 3.14159) + 0.5,
-                        theta / 3.14159 + 0.5);
+            return vec2(phi / (2.0 * 3.14159265) + 0.5,
+                        theta / 3.14159265 + 0.5);
         }
 
         // Rotate xz by skybox rotation angle

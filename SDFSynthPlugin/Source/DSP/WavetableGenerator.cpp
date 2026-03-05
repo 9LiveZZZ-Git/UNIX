@@ -106,20 +106,21 @@ WavetableGenerator::Wavetable WavetableGenerator::generateWithMode(
     float topoMorph, float distScale,
     const TextureSlot* dispSlot, float dispAmt,
     const TextureSlot* emitSlot, float emIntensity,
-    float texScale)
+    float texScale,
+    ScanAlgorithmData* outAlgData)
 {
     switch (mode)
     {
         case ScanMode::RayMarchSonify:
-            return generateRayMarchSonify(scene, scanRadius, scanHeight, topoMorph, distScale);
+            return generateRayMarchSonify(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::AcousticTrace:
-            return generateAcousticTrace(scene, scanRadius, scanHeight, topoMorph, distScale);
+            return generateAcousticTrace(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::GranularCurvature:
-            return generateGranularCurvature(scene, scanRadius, scanHeight, topoMorph, distScale);
+            return generateGranularCurvature(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::VolumetricSpectro:
-            return generateVolumetricSpectro(scene, scanRadius, scanHeight, topoMorph, distScale);
+            return generateVolumetricSpectro(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::FieldTraverse:
-            return generateFieldTraverse(scene, scanRadius, scanHeight, topoMorph, distScale);
+            return generateFieldTraverse(scene, scanRadius, scanHeight, topoMorph, distScale, outAlgData);
         case ScanMode::Contour:
         default:
             return generate(scene, contour, scanRadius, scanHeight,
@@ -256,7 +257,8 @@ static void crossfadeLoopPoint(std::array<float, sdf::TABLE_SIZE>& table, int fa
 
 WavetableGenerator::Wavetable WavetableGenerator::generateRayMarchSonify(
     const SDFScene3D& scene,
-    float scanRadius, float scanHeight, float topoMorph, float distScale)
+    float scanRadius, float scanHeight, float topoMorph, float distScale,
+    ScanAlgorithmData* outAlgData)
 {
     Wavetable table{};
     const int n = sdf::TABLE_SIZE;
@@ -264,14 +266,23 @@ WavetableGenerator::Wavetable WavetableGenerator::generateRayMarchSonify(
     int numRays = 1 + static_cast<int>(std::floor(topoMorph * 7.f));
     numRays = std::clamp(numRays, 1, sdf::MARCH_SONIFY_MAX_RAYS);
     int samplesPerRay = n / numRays;
+    float maxRange = scanRadius * 2.f;
+
+    // Phase 4a: adaptive Tukey taper — wider crossfade for more rays
+    float taper = sdf::MARCH_TUKEY_TAPER + 0.1f * (static_cast<float>(numRays) / 8.f);
+
+    // Export algorithm data
+    if (outAlgData)
+    {
+        outAlgData->numRays = numRays;
+        outAlgData->maxRange = maxRange;
+    }
 
     for (int ray = 0; ray < numRays; ++ray)
     {
         float azimuth = ray * sdf::GOLDEN_ANGLE;
         float dirX = std::cos(azimuth);
         float dirZ = std::sin(azimuth);
-
-        float maxRange = scanRadius * 2.f;
 
         for (int s = 0; s < samplesPerRay; ++s)
         {
@@ -282,15 +293,15 @@ WavetableGenerator::Wavetable WavetableGenerator::generateRayMarchSonify(
             float pz = dirZ * t;
             float d = scene.evaluate(px, scanHeight, pz);
 
-            // tanh mapping: near misses → sharp notches, interior → negative
+            // tanh mapping: near misses -> sharp notches, interior -> negative
             float val = std::tanh(d * distScale);
 
             // Tukey window per segment: cosine taper first/last portion
             float window = 1.f;
-            if (frac < sdf::MARCH_TUKEY_TAPER)
-                window = 0.5f * (1.f - std::cos(sdf::PI * frac / sdf::MARCH_TUKEY_TAPER));
-            else if (frac > (1.f - sdf::MARCH_TUKEY_TAPER))
-                window = 0.5f * (1.f - std::cos(sdf::PI * (1.f - frac) / sdf::MARCH_TUKEY_TAPER));
+            if (frac < taper)
+                window = 0.5f * (1.f - std::cos(sdf::PI * frac / taper));
+            else if (frac > (1.f - taper))
+                window = 0.5f * (1.f - std::cos(sdf::PI * (1.f - frac) / taper));
 
             int idx = ray * samplesPerRay + s;
             if (idx < n)
@@ -316,13 +327,18 @@ WavetableGenerator::Wavetable WavetableGenerator::generateRayMarchSonify(
 
 WavetableGenerator::Wavetable WavetableGenerator::generateAcousticTrace(
     const SDFScene3D& scene,
-    float /*scanRadius*/, float scanHeight, float topoMorph, float distScale)
+    float /*scanRadius*/, float scanHeight, float topoMorph, float distScale,
+    ScanAlgorithmData* outAlgData)
 {
     Wavetable table{};
     const int n = sdf::TABLE_SIZE;
 
     int maxBounces = 1 + static_cast<int>(std::floor(topoMorph * 5.f));
     maxBounces = std::clamp(maxBounces, 1, sdf::ACOUSTIC_MAX_BOUNCES);
+
+    // Export algorithm data
+    if (outAlgData)
+        outAlgData->maxBounces = maxBounces;
 
     for (int r = 0; r < sdf::ACOUSTIC_NUM_RAYS; ++r)
     {
@@ -400,7 +416,8 @@ WavetableGenerator::Wavetable WavetableGenerator::generateAcousticTrace(
             oy += ny * sdf::ACOUSTIC_PUSH_OFFSET;
             oz += nz * sdf::ACOUSTIC_PUSH_OFFSET;
 
-            energy *= sdf::ACOUSTIC_ENERGY_DECAY;
+            // Phase 4b: surface-dependent energy decay — glancing reflections retain more
+            energy *= 0.7f + 0.2f * std::abs(dot);
         }
     }
 
@@ -427,7 +444,8 @@ WavetableGenerator::Wavetable WavetableGenerator::generateAcousticTrace(
 
 WavetableGenerator::Wavetable WavetableGenerator::generateGranularCurvature(
     const SDFScene3D& scene,
-    float /*scanRadius*/, float scanHeight, float topoMorph, float distScale)
+    float /*scanRadius*/, float scanHeight, float topoMorph, float distScale,
+    ScanAlgorithmData* outAlgData)
 {
     Wavetable table{};
     const int n = sdf::TABLE_SIZE;
@@ -438,10 +456,21 @@ WavetableGenerator::Wavetable WavetableGenerator::generateGranularCurvature(
     float windowWidth = 0.2f * (1.f - topoMorph * 0.8f);
     float invWW2 = 1.f / (windowWidth * windowWidth + 0.0001f);
 
+    // Phase 4c: scale max frequency range with distScale
+    float maxFreq = sdf::GRAIN_MAX_FREQ * (0.5f + distScale * 0.5f);
+
     struct Grain { float angle; float freq; };
     std::array<Grain, sdf::GRAIN_MAX_COUNT> grains{};
 
     constexpr float cEps = sdf::GRAIN_CURVATURE_EPS;
+
+    // Export algorithm data
+    if (outAlgData)
+    {
+        outAlgData->numGrains = numGrains;
+        outAlgData->grainData.clear();
+        outAlgData->grainData.reserve(static_cast<size_t>(numGrains));
+    }
 
     for (int g = 0; g < numGrains; ++g)
     {
@@ -452,7 +481,7 @@ WavetableGenerator::Wavetable WavetableGenerator::generateGranularCurvature(
         float pz = std::sin(angle) * surfR;
         float py = scanHeight;
 
-        // Laplacian curvature (7 evals): d²f/dx² + d²f/dy² + d²f/dz²
+        // Laplacian curvature (7 evals)
         float fc = scene.evaluate(px, py, pz);
         float curvature = (scene.evaluate(px + cEps, py, pz) + scene.evaluate(px - cEps, py, pz)
                          + scene.evaluate(px, py + cEps, pz) + scene.evaluate(px, py - cEps, pz)
@@ -460,8 +489,11 @@ WavetableGenerator::Wavetable WavetableGenerator::generateGranularCurvature(
                          - 6.f * fc) / (cEps * cEps);
 
         float freq = std::clamp(2.f + std::abs(curvature) * distScale * sdf::GRAIN_CURVATURE_SCALE,
-                                sdf::GRAIN_MIN_FREQ, sdf::GRAIN_MAX_FREQ);
+                                sdf::GRAIN_MIN_FREQ, maxFreq);
         grains[g] = { angle, freq };
+
+        if (outAlgData)
+            outAlgData->grainData.push_back({ angle, freq, curvature });
     }
 
     for (int i = 0; i < n; ++i)
@@ -493,16 +525,34 @@ WavetableGenerator::Wavetable WavetableGenerator::generateGranularCurvature(
 
 WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
     const SDFScene3D& scene,
-    float scanRadius, float scanHeight, float topoMorph, float distScale)
+    float scanRadius, float scanHeight, float topoMorph, float distScale,
+    ScanAlgorithmData* outAlgData)
 {
     Wavetable table{};
     const int n = sdf::TABLE_SIZE;
 
-    int activeBins = 8 + static_cast<int>(std::floor(topoMorph * 24.f));
+    int activeBins = 8 + static_cast<int>(std::floor(topoMorph * static_cast<float>(sdf::SPECTRO_HEIGHT_SLICES - 8)));
     activeBins = std::clamp(activeBins, 8, sdf::SPECTRO_HEIGHT_SLICES);
 
+    // Phase 4d: shape-adaptive height range — pre-scan vertical extent
+    float heightRange = sdf::SPECTRO_HEIGHT_RANGE;
+    {
+        float dirX = std::cos(0.f) * scanRadius;
+        float dirZ = std::sin(0.f) * scanRadius;
+        float lo = scanHeight, hi = scanHeight;
+        for (float dy = 0.01f; dy < 1.5f; dy += 0.02f)
+        {
+            if (scene.evaluate(dirX, scanHeight + dy, dirZ) < 0.3f)
+                hi = scanHeight + dy;
+            if (scene.evaluate(dirX, scanHeight - dy, dirZ) < 0.3f)
+                lo = scanHeight - dy;
+        }
+        float extent = (hi - lo) * 0.5f;
+        if (extent > 0.05f)
+            heightRange = std::clamp(extent, 0.1f, 1.0f);
+    }
+
     // Sample SDF on cylindrical grid and compute per-height average magnitude
-    // This gives constant harmonic weights → clean additive synthesis
     std::array<float, sdf::SPECTRO_HEIGHT_SLICES> harmonicWeights{};
     harmonicWeights.fill(0.f);
 
@@ -514,8 +564,8 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
 
         for (int h = 0; h < sdf::SPECTRO_HEIGHT_SLICES; ++h)
         {
-            float hy = scanHeight - sdf::SPECTRO_HEIGHT_RANGE
-                     + (static_cast<float>(h) / (sdf::SPECTRO_HEIGHT_SLICES - 1)) * (sdf::SPECTRO_HEIGHT_RANGE * 2.f);
+            float hy = scanHeight - heightRange
+                     + (static_cast<float>(h) / (sdf::SPECTRO_HEIGHT_SLICES - 1)) * (heightRange * 2.f);
             float d = scene.evaluate(cx, hy, cz);
             harmonicWeights[h] += std::exp(-d * d * distScale * distScale * 4.f);
         }
@@ -524,6 +574,13 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
     // Normalize weights by angle count
     for (int h = 0; h < sdf::SPECTRO_HEIGHT_SLICES; ++h)
         harmonicWeights[h] /= sdf::SPECTRO_ANGLE_SAMPLES;
+
+    // Export algorithm data
+    if (outAlgData)
+    {
+        outAlgData->activeBins = activeBins;
+        outAlgData->harmonicWeights = harmonicWeights;
+    }
 
     // Additive synthesis with constant harmonic weights
     for (int i = 0; i < n; ++i)
@@ -534,8 +591,7 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
         for (int h = 0; h < activeBins; ++h)
         {
             float harmonic = static_cast<float>(h + 1);
-            float rolloff = 1.f / std::sqrt(harmonic);
-            sum += harmonicWeights[h] * rolloff * std::sin(phase * harmonic);
+            sum += harmonicWeights[h] * std::sin(phase * harmonic);
         }
 
         table[i] = sum;
@@ -551,12 +607,12 @@ WavetableGenerator::Wavetable WavetableGenerator::generateVolumetricSpectro(
 
 WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
     const SDFScene3D& scene,
-    float scanRadius, float scanHeight, float topoMorph, float distScale)
+    float scanRadius, float scanHeight, float topoMorph, float distScale,
+    ScanAlgorithmData* outAlgData)
 {
     const int n = sdf::TABLE_SIZE;
-    const int overN = n * sdf::FIELD_PATH_OVERSAMPLE; // 8192
 
-    // Lissajous ratios morph with topoMorph
+    // Lissajous ratios morph with topoMorph (piecewise formula)
     float a, b, c, delta;
     if (topoMorph < 0.5f)
     {
@@ -575,9 +631,22 @@ WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
         delta = 0.5f + t * 1.f;
     }
 
+    // Export algorithm data
+    if (outAlgData)
+    {
+        outAlgData->lissA = a;
+        outAlgData->lissB = b;
+        outAlgData->lissC = c;
+        outAlgData->lissDelta = delta;
+    }
+
+    // Phase 4e: adaptive oversampling — higher ratios need more samples
+    int osRate = sdf::FIELD_PATH_OVERSAMPLE + static_cast<int>(std::ceil(std::max({a, b, c}) / 2.f));
+    osRate = std::min(osRate, 12); // cap to avoid huge allocations
+    const int overN = n * osRate;
+
     // Oversample: evaluate SDF along 3D Lissajous path
-    static constexpr int MAX_OVER = sdf::TABLE_SIZE * sdf::FIELD_PATH_OVERSAMPLE;
-    std::array<float, MAX_OVER> oversampled{};
+    std::vector<float> oversampled(static_cast<size_t>(overN));
     for (int i = 0; i < overN; ++i)
     {
         float t = (static_cast<float>(i) / overN) * sdf::TWO_PI;
@@ -586,30 +655,29 @@ WavetableGenerator::Wavetable WavetableGenerator::generateFieldTraverse(
         float py = scanHeight + std::sin(c * t) * scanRadius * 0.4f;
 
         float d = scene.evaluate(px, py, pz);
-        oversampled[i] = std::tanh(d * distScale);
+        oversampled[static_cast<size_t>(i)] = std::tanh(d * distScale);
     }
 
     // Decimate with triangular (Bartlett) window for better anti-aliasing than box
     Wavetable table{};
-    const int os = sdf::FIELD_PATH_OVERSAMPLE;
     for (int i = 0; i < n; ++i)
     {
         float sum = 0.f;
         float wSum = 0.f;
-        int base = i * os;
-        for (int j = 0; j < os; ++j)
+        int base = i * osRate;
+        for (int j = 0; j < osRate; ++j)
         {
             // Triangular weight: peak at center of the window
-            float w = 1.f - std::abs(2.f * j - (os - 1)) / static_cast<float>(os);
-            sum += oversampled[base + j] * w;
+            float w = 1.f - std::abs(2.f * j - (osRate - 1)) / static_cast<float>(osRate);
+            sum += oversampled[static_cast<size_t>(base + j)] * w;
             wSum += w;
         }
         table[i] = sum / wSum;
     }
 
-    // FIX: Crossfade loop point — non-integer Lissajous ratios don't close,
-    // causing a click where table[2047] wraps to table[0]
-    crossfadeLoopPoint(table, sdf::FIELD_CROSSFADE_LEN);
+    // Phase 4e: extended crossfade for smoother loop closure
+    int crossfadeLen = sdf::FIELD_CROSSFADE_LEN + 16; // 48 samples
+    crossfadeLoopPoint(table, crossfadeLen);
 
     removeDCAndNormalize(table);
 

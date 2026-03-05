@@ -458,6 +458,7 @@ void SDFSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         currentWavetable = pendingWavetable;
         activeWavetable = pendingWavetable;
         currentContour = pendingContour;  // shared_ptr copy (8 bytes)
+        currentAlgData = pendingAlgData;  // shared_ptr copy
         synthesiser.setMipMappedWavetable(pendingMipTable, CROSSFADE_SAMPLES);  // shared_ptr copy
     }
 
@@ -914,15 +915,14 @@ void SDFSynthProcessor::triggerBackgroundRebuild()
         // Use local copies for computation
         SDFScene3D localScene = snapScene;
         ContourExtractor localExtractor;
-        std::vector<ContourPoint> localContour;
+        auto localContour = localExtractor.extractContour(localScene, scanH);
 
-        if (mode == ScanMode::Contour)
-            localContour = localExtractor.extractContour(localScene, scanH);
-
+        auto localAlgData = std::make_shared<ScanAlgorithmData>();
         auto localWavetable = WavetableGenerator::generateWithMode(
             mode, localScene, localContour,
             scanR, scanH, topoM, distS,
-            dSlotCopy.get(), dispA, eSlotCopy.get(), emI, texS);
+            dSlotCopy.get(), dispA, eSlotCopy.get(), emI, texS,
+            localAlgData.get());
 
         auto localMipTable = WavetableGenerator::generateMipMap(localWavetable);
 
@@ -930,16 +930,14 @@ void SDFSynthProcessor::triggerBackgroundRebuild()
         pendingWavetable = localWavetable;
         pendingContour = std::make_shared<const std::vector<ContourPoint>>(std::move(localContour));
         pendingMipTable = std::make_shared<const MipMappedWavetable>(localMipTable);
+        pendingAlgData = localAlgData;
         newTableReady.store(true, std::memory_order_release);
 
         // Build Osc B table if enabled (same thread, sequential)
         if (oscBEnabled)
         {
             ContourExtractor localExtractorB;
-            std::vector<ContourPoint> localContourB;
-
-            if (oscBMode == ScanMode::Contour)
-                localContourB = localExtractorB.extractContour(localScene, oscBScanH);
+            auto localContourB = localExtractorB.extractContour(localScene, oscBScanH);
 
             auto localWavetableB = WavetableGenerator::generateWithMode(
                 oscBMode, localScene, localContourB,
@@ -951,7 +949,7 @@ void SDFSynthProcessor::triggerBackgroundRebuild()
             newTableBReady.store(true, std::memory_order_release);
         }
 
-        rebuildInProgress.store(false, std::memory_order_relaxed);
+        rebuildInProgress.store(false, std::memory_order_release);
     });
 }
 
@@ -963,9 +961,8 @@ void SDFSynthProcessor::rebuildWavetable()
         static_cast<int>(apvts.getRawParameterValue("scanMode")->load()));
     float scanH = apvts.getRawParameterValue("scanHeight")->load();
 
-    std::vector<ContourPoint> contour;
-    if (mode == ScanMode::Contour)
-        contour = contourExtractor.extractContour(scene, scanH);
+    // Always extract contour for visualization overlay (cheap: 512 rays)
+    auto contour = contourExtractor.extractContour(scene, scanH);
     currentContour = std::make_shared<const std::vector<ContourPoint>>(std::move(contour));
 
     const TextureSlot* dSlot = texSystem ? &texSystem->dispTex : nullptr;

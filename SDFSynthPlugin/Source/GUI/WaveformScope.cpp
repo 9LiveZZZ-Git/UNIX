@@ -47,13 +47,7 @@ void WaveformScope::paint(juce::Graphics& g)
     }
 
     if (scanMode == 0)
-    {
         drawMRIIndicator(g, mriBarArea);
-
-        if (topoMorph > 0.3f && contour != nullptr)
-            drawMiniCrossSection(g, juce::Rectangle<float>(
-                scopeArea.getRight() - 78.f, scopeArea.getY() + 4.f, 70.f, 70.f));
-    }
 }
 
 void WaveformScope::drawGrid(juce::Graphics& g, juce::Rectangle<float> area)

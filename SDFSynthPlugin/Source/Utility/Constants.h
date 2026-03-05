@@ -24,7 +24,7 @@ constexpr int ACOUSTIC_MAX_BOUNCES    = 6;
 constexpr int ACOUSTIC_MARCH_STEPS    = 48;
 constexpr float GRADIENT_EPS          = 0.001f;
 constexpr int SPECTRO_ANGLE_SAMPLES   = 256;
-constexpr int SPECTRO_HEIGHT_SLICES   = 32;
+constexpr int SPECTRO_HEIGHT_SLICES   = 512;
 constexpr int FIELD_PATH_OVERSAMPLE   = 4;
 
 // Acoustic ray tracing

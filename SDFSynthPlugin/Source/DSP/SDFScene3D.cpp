@@ -32,7 +32,7 @@ float SDFScene3D::evaluate(float x, float y, float z) const
 {
     float sx = x, sy = y, sz = z;
 
-    if (twist > 0.01f)
+    if (std::abs(twist) > 0.005f)
     {
         float c = std::cos(twist * sy);
         float s = std::sin(twist * sy);

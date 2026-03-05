@@ -87,13 +87,15 @@ public:
         return true;
     }
 
-    // Helper: compute difference between two buffers (sum of absolute diffs)
+    // Helper: compute difference between two buffers (sum of absolute diffs, all channels)
     static float bufferDiff(const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
     {
         jassert(a.getNumSamples() == b.getNumSamples());
         float diff = 0.f;
-        for (int i = 0; i < a.getNumSamples(); ++i)
-            diff += std::abs(a.getSample(0, i) - b.getSample(0, i));
+        int channels = std::min(a.getNumChannels(), b.getNumChannels());
+        for (int ch = 0; ch < channels; ++ch)
+            for (int i = 0; i < a.getNumSamples(); ++i)
+                diff += std::abs(a.getSample(ch, i) - b.getSample(ch, i));
         return diff;
     }
 

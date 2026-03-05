@@ -255,7 +255,7 @@ elseif(WIN32)
     set(VST3_INSTALL_DIR "$ENV{COMMONPROGRAMFILES}/VST3")
 endif()
 
-add_custom_target(install_plugin
+add_custom_target(install_sdf_plugin
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "$<TARGET_FILE_DIR:SDFSynthPlugin_VST3>/../"
         "${VST3_INSTALL_DIR}/SDF Synth.vst3"

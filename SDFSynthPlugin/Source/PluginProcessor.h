@@ -80,6 +80,9 @@ public:
     float getActivePhase() const { return synthesiser.getActivePhase(); }
     int getActiveVoiceCount() const { return synthesiser.getActiveVoiceCount(); }
 
+    // Scan algorithm data (exported from wavetable generation for overlay visualization)
+    std::shared_ptr<const ScanAlgorithmData> getAlgorithmData() const { return currentAlgData; }
+
     // Texture system reference (set by editor, used for audio modulation)
     void setTextureSystem(TextureSystem* ts) { texSystem = ts; }
     void markWavetableDirty() { wavetableDirty.store(true); }
@@ -165,6 +168,8 @@ private:
     std::shared_ptr<const MipMappedWavetable> pendingMipTable;
     WavetableGenerator::Wavetable pendingWavetable{};
     std::shared_ptr<const std::vector<ContourPoint>> pendingContour;
+    std::shared_ptr<const ScanAlgorithmData> pendingAlgData;
+    std::shared_ptr<const ScanAlgorithmData> currentAlgData;
 
     // Noise generator + dedicated LP filter (stereo)
     NoiseGenerator noiseGen;

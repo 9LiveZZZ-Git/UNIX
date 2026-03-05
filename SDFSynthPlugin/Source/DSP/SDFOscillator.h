@@ -90,8 +90,7 @@ public:
         if (mipTable != nullptr)
         {
             float pos = phase * sdf::TABLE_SIZE;
-            // Must use const version
-            return const_cast<SDFOscillator*>(this)->sampleFromMip(mipTable, pos);
+            return sampleFromMip(mipTable, pos);
         }
         if (flatWavetable != nullptr)
         {
@@ -138,7 +137,7 @@ private:
         return ((a0 * f + a1) * f + a2) * f + a3;
     }
 
-    float sampleFromMip(const MipMappedWavetable* table, float pos)
+    float sampleFromMip(const MipMappedWavetable* table, float pos) const
     {
         // Bias +0.5 so we always lean toward the more band-limited table,
         // eliminating aliasing at octave crossover boundaries
@@ -192,8 +191,8 @@ private:
     const float* flatWavetable = nullptr;
     const MipMappedWavetable* mipTable = nullptr;
 
-    // Mip level hysteresis
-    float smoothedLevel = 0.f;
+    // Mip level hysteresis (mutable: updated from const nextSampleNoAdvance)
+    mutable float smoothedLevel = 0.f;
 
     // Crossfade state
     const MipMappedWavetable* prevMipTable = nullptr;

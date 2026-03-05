@@ -45,6 +45,8 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
         visTab.getSkyboxSelector().setSelectedId(1, juce::dontSendNotification);
         processor.markWavetableDirty();
         presetBrowserBtn.setButtonText("-- Preset --");
+        shapeTab.syncButtonsFromAPVTS();
+        updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
     };
     addAndMakeVisible(initBtn);
 
@@ -59,6 +61,8 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
             abBtn.setButtonText("B");
             abBtn.setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::secondaryAccent);
             applyPresetResources();
+            shapeTab.syncButtonsFromAPVTS();
+            updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
         }
         else
         {
@@ -67,6 +71,8 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
             abBtn.setButtonText("A");
             abBtn.setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::mutedText);
             applyPresetResources();
+            shapeTab.syncButtonsFromAPVTS();
+            updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
         }
     };
     addAndMakeVisible(abBtn);
@@ -121,6 +127,8 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
                 {
                     presetManager.loadPreset(file);
                     applyPresetResources();
+                    shapeTab.syncButtonsFromAPVTS();
+                    updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
                 }
             });
     };
@@ -201,6 +209,7 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
     addAndMakeVisible(modTab);
     addAndMakeVisible(visTab);
     addAndMakeVisible(bottomStrip);
+    viewport3D.addAndMakeVisible(scanModeOverlay);
 
     // Tab switching
     tabBar.onTabChanged = [this](int idx) { switchTab(idx); };
@@ -210,6 +219,9 @@ SDFSynthEditor::SDFSynthEditor(SDFSynthProcessor& p)
     processor.apvts.addParameterListener("scanMode", this);
 
     setupModRouting();
+
+    // Initialize scan labels for current mode
+    updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
 
     // IMPORTANT: setSize must be LAST
     setResizable(true, true);
@@ -258,12 +270,30 @@ void SDFSynthEditor::filesDropped(const juce::StringArray& files, int, int)
     }
 }
 
-void SDFSynthEditor::parameterChanged(const juce::String& parameterID, float)
+void SDFSynthEditor::parameterChanged(const juce::String& parameterID, float newValue)
 {
     if (parameterID == "scanMode")
     {
-        // Could update scan knob labels in ShapeTab if needed
+        juce::MessageManager::callAsync([this, newValue]()
+        {
+            updateScanLabels(static_cast<int>(newValue));
+        });
     }
+}
+
+void SDFSynthEditor::updateScanLabels(int mode)
+{
+    // Labels: scanRadius, scanHeight, topoMorph, distScale
+    static const char* radiusLabels[] = { "Radius", "Rays",    "Bounces", "Radius", "Bands",  "Speed"  };
+    static const char* heightLabels[] = { "Height", "Height",  "Height",  "Height", "Height", "Height" };
+    static const char* morphLabels[]  = { "MRI",    "Depth",   "Decay",   "Curve",  "Spread", "Length" };
+    static const char* scaleLabels[]  = { "Scale",  "Scale",   "Scale",   "Scale",  "Scale",  "Scale"  };
+
+    int m = juce::jlimit(0, 5, mode);
+    shapeTab.getScanRadiusKnob().setLabel(radiusLabels[m]);
+    shapeTab.getScanHeightKnob().setLabel(heightLabels[m]);
+    shapeTab.getTopoMorphKnob().setLabel(morphLabels[m]);
+    shapeTab.getDistScaleKnob().setLabel(scaleLabels[m]);
 }
 
 void SDFSynthEditor::timerCallback()
@@ -274,6 +304,16 @@ void SDFSynthEditor::timerCallback()
     waveformScope.setScanHeight(processor.apvts.getRawParameterValue("scanHeight")->load());
     waveformScope.setTopoMorph(processor.apvts.getRawParameterValue("topoMorph")->load());
     waveformScope.setScanMode(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
+
+    // Update scan mode overlay
+    scanModeOverlay.setScanMode(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
+    scanModeOverlay.setContour(processor.getCurrentContourPtr());
+    scanModeOverlay.setScanHeight(processor.apvts.getRawParameterValue("scanHeight")->load());
+    scanModeOverlay.setTopoMorph(processor.apvts.getRawParameterValue("topoMorph")->load());
+    scanModeOverlay.setScanRadius(processor.apvts.getRawParameterValue("scanRadius")->load());
+    scanModeOverlay.setDistScale(processor.apvts.getRawParameterValue("distScale")->load());
+    scanModeOverlay.setPlayheadPhase(processor.getActivePhase());
+    scanModeOverlay.setAlgorithmData(processor.getAlgorithmData());
 
     int voiceCount = processor.getActiveVoiceCount();
     if (voiceCount != lastVoiceCount)
@@ -447,14 +487,18 @@ void SDFSynthEditor::paint(juce::Graphics& g)
         g.drawText("VOXELIZING...", vpBounds, juce::Justification::centred);
     }
 
-    // Mod drag wire from ADSR display
+}
+
+void SDFSynthEditor::paintOverChildren(juce::Graphics& g)
+{
+    // Mod drag wire from ADSR display — rendered on top of all child components
     if (bottomStrip.getAdsrDisplay().isModDragActive())
     {
         auto& ad = bottomStrip.getAdsrDisplay();
         auto handleCentre = ad.getModHandleCentre();
         auto start = ad.localPointToGlobal(handleCentre);
         start = getLocalPoint(nullptr, start);
-        auto end = ad.getModDragPos();
+        auto end = getLocalPoint(&bottomStrip, ad.getModDragPos());
 
         juce::Path wire;
         wire.startNewSubPath(start.toFloat());
@@ -524,9 +568,18 @@ void SDFSynthEditor::resized()
 
     // === LEFT COLUMN: viewport + waveform ===
     {
-        int wfH = SDFLookAndFeel::scaledInt(80);
+        int wfH = SDFLookAndFeel::scaledInt(130);
         waveformScope.setBounds(leftCol.removeFromBottom(wfH).reduced(margin, margin / 2));
         viewport3D.setBounds(leftCol.reduced(margin, margin));
+
+        // Scan mode overlay: bottom-right corner of viewport (child of viewport3D)
+        int overlayW = SDFLookAndFeel::scaledInt(130);
+        int overlayH = SDFLookAndFeel::scaledInt(130);
+        int pad = SDFLookAndFeel::scaledInt(4);
+        scanModeOverlay.setBounds(
+            viewport3D.getWidth() - overlayW - pad,
+            viewport3D.getHeight() - overlayH - pad,
+            overlayW, overlayH);
     }
 
     // === RIGHT COLUMN: tab bar + tab content ===
@@ -606,9 +659,10 @@ void SDFSynthEditor::setupModRouting()
     {
         knob->setModTargetEnabled(true);
 
-        knob->onModRouteRemoved = [this, knob](ModSource src)
+        juce::String paramId = knob->getParameterID();
+        knob->onModRouteRemoved = [this, paramId](ModSource src)
         {
-            int destIdx = SDFSynthProcessor::getDestIndex(knob->getParameterID());
+            int destIdx = SDFSynthProcessor::getDestIndex(paramId);
             if (destIdx >= 0)
             {
                 auto& mm = processor.getModMatrix();
@@ -618,9 +672,9 @@ void SDFSynthEditor::setupModRouting()
             }
         };
 
-        knob->onModDepthChanged = [this, knob](ModSource src, float newDepth)
+        knob->onModDepthChanged = [this, paramId](ModSource src, float newDepth)
         {
-            int destIdx = SDFSynthProcessor::getDestIndex(knob->getParameterID());
+            int destIdx = SDFSynthProcessor::getDestIndex(paramId);
             if (destIdx >= 0)
             {
                 auto& mm = processor.getModMatrix();
@@ -651,7 +705,8 @@ void SDFSynthEditor::setupModRouting()
 
     adsrDisplay.onModDragging = [this](juce::Point<int> pos)
     {
-        auto* knob = findKnobAt(pos);
+        auto editorPos = getLocalPoint(&bottomStrip, pos);
+        auto* knob = findKnobAt(editorPos);
         if (knob != currentModHighlight)
         {
             if (currentModHighlight)
@@ -667,7 +722,8 @@ void SDFSynthEditor::setupModRouting()
         if (currentModHighlight)
             currentModHighlight->setModDragHighlight(false);
 
-        auto* knob = findKnobAt(pos);
+        auto editorPos = getLocalPoint(&bottomStrip, pos);
+        auto* knob = findKnobAt(editorPos);
         if (knob)
         {
             int destIdx = SDFSynthProcessor::getDestIndex(knob->getParameterID());
@@ -761,6 +817,8 @@ void SDFSynthEditor::showPresetMenu()
                 presetManager.loadFactoryPreset(idx);
                 applyPresetResources();
                 presetBrowserBtn.setButtonText(presets[static_cast<size_t>(idx)].name);
+                shapeTab.syncButtonsFromAPVTS();
+                updateScanLabels(static_cast<int>(processor.apvts.getRawParameterValue("scanMode")->load()));
             }
         });
 }

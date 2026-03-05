@@ -30,9 +30,12 @@ public:
             addAndMakeVisible(btn);
         }
 
-        int initVal = static_cast<int>(apvts.getRawParameterValue(paramId)->load());
-        if (initVal >= 0 && initVal < buttons.size())
-            buttons[initVal]->setToggleState(true, juce::dontSendNotification);
+        if (auto* paramVal = apvts.getRawParameterValue(paramId))
+        {
+            int initVal = static_cast<int>(paramVal->load());
+            if (initVal >= 0 && initVal < buttons.size())
+                buttons[initVal]->setToggleState(true, juce::dontSendNotification);
+        }
 
         apvts.addParameterListener(paramId, this);
     }

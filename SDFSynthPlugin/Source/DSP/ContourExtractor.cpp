@@ -31,7 +31,9 @@ std::vector<ContourPoint> ContourExtractor::extractContour(const SDFScene3D& sce
                 // Illinois method (regula falsi with anti-stall modification)
                 for (int b = 0; b < sdf::BINARY_ITERS; ++b)
                 {
-                    float rMid = rLo - dLo * (rHi - rLo) / (dHi - dLo);
+                    float denom = dHi - dLo;
+                    if (std::abs(denom) < 1e-10f) break;
+                    float rMid = rLo - dLo * (rHi - rLo) / denom;
                     float dMid = scene.evaluate(dirX * rMid, scanHeight, dirZ * rMid);
 
                     if ((dMid < 0.f) == (dLo < 0.f))
@@ -47,7 +49,10 @@ std::vector<ContourPoint> ContourExtractor::extractContour(const SDFScene3D& sce
                         dLo *= 0.5f;
                     }
                 }
-                lastCrossing = rLo - dLo * (rHi - rLo) / (dHi - dLo);
+                float finalDenom = dHi - dLo;
+                lastCrossing = (std::abs(finalDenom) > 1e-10f)
+                    ? rLo - dLo * (rHi - rLo) / finalDenom
+                    : (rLo + rHi) * 0.5f;
             }
             prevD = d;
         }

@@ -3,16 +3,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SDFLookAndFeel.h"
 #include "ArcKnob.h"
-#include "ShapeSelector.h"
-#include "SegmentedControl.h"
 
 class ShapeTab : public juce::Component
 {
 public:
     ShapeTab(juce::AudioProcessorValueTreeState& apvts)
-        : shapeASelector(apvts, "shape1", "A"),
-          shapeBSelector(apvts, "shape2", "B"),
-          sizeAKnob(apvts, "size1", "Size A", SDFLookAndFeel::primaryAccent),
+        : sizeAKnob(apvts, "size1", "Size A", SDFLookAndFeel::primaryAccent),
           sizeBKnob(apvts, "size2", "Size B", SDFLookAndFeel::primaryAccent),
           offsetXKnob(apvts, "offsetX", "Off X", SDFLookAndFeel::primaryAccent),
           offsetYKnob(apvts, "offsetY", "Off Y", SDFLookAndFeel::primaryAccent),
@@ -22,61 +18,54 @@ public:
           scanHeightKnob(apvts, "scanHeight", "Height", SDFLookAndFeel::secondaryAccent),
           topoMorphKnob(apvts, "topoMorph", "MRI", SDFLookAndFeel::secondaryAccent),
           distScaleKnob(apvts, "distScale", "Scale", SDFLookAndFeel::secondaryAccent),
-          sfMKnob(apvts, "sfM", "SF M", SDFLookAndFeel::primaryAccent),
-          sfN1Knob(apvts, "sfN1", "SF N1", SDFLookAndFeel::primaryAccent),
-          sfN2Knob(apvts, "sfN2", "SF N2", SDFLookAndFeel::primaryAccent),
-          sfN3Knob(apvts, "sfN3", "SF N3", SDFLookAndFeel::primaryAccent),
-          onionThicknessKnob(apvts, "onionThickness", "Shell", SDFLookAndFeel::primaryAccent),
-          stairCountKnob(apvts, "stairCount", "Steps", SDFLookAndFeel::primaryAccent),
+          sfMKnob(apvts, "sfM", "SF M", SDFLookAndFeel::secondaryAccent),
+          sfN1Knob(apvts, "sfN1", "SF N1", SDFLookAndFeel::secondaryAccent),
+          sfN2Knob(apvts, "sfN2", "SF N2", SDFLookAndFeel::secondaryAccent),
+          sfN3Knob(apvts, "sfN3", "SF N3", SDFLookAndFeel::secondaryAccent),
+          onionThicknessKnob(apvts, "onionThickness", "Shell", SDFLookAndFeel::secondaryAccent),
+          stairCountKnob(apvts, "stairCount", "Steps", SDFLookAndFeel::secondaryAccent),
           apvtsRef(apvts)
     {
-        addAndMakeVisible(shapeASelector);
-        addAndMakeVisible(shapeBSelector);
+        // Shape A dropdown
+        auto shapeNames = getShapeNames();
+        for (int i = 0; i < shapeNames.size(); ++i)
+            shapeABox.addItem(shapeNames[i], i + 1);
+        setupComboBox(shapeABox, SDFLookAndFeel::primaryAccent);
+        addAndMakeVisible(shapeABox);
+        shapeAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+            apvts, "shape1", shapeABox);
 
-        // Operation buttons (11 ops)
-        juce::StringArray opNames = { "SMTH", "UNION", "INTER", "SUB",
-                                       "SM.I", "SM.S", "CH.U", "CH.I", "CH.S", "STRS", "PIPE" };
+        // Operation dropdown
+        juce::StringArray opNames = { "Smooth Union", "Union", "Intersection", "Subtraction",
+                                       "Smooth Intersect", "Smooth Subtract",
+                                       "Chamfer Union", "Chamfer Intersect", "Chamfer Subtract",
+                                       "Stairs", "Pipe" };
         for (int i = 0; i < opNames.size(); ++i)
-        {
-            auto* btn = opButtons.add(new juce::TextButton(opNames[i]));
-            btn->setClickingTogglesState(true);
-            btn->setRadioGroupId(9999);
-            btn->setColour(juce::TextButton::buttonOnColourId, SDFLookAndFeel::secondaryAccent);
-            btn->setColour(juce::TextButton::textColourOnId, SDFLookAndFeel::secondaryAccent);
-            btn->setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::mutedText);
-            btn->onClick = [this, i]()
-            {
-                if (auto* param = apvtsRef.getParameter("operation"))
-                    param->setValueNotifyingHost(param->convertTo0to1(static_cast<float>(i)));
-            };
-            addAndMakeVisible(btn);
-        }
+            operationBox.addItem(opNames[i], i + 1);
+        setupComboBox(operationBox, SDFLookAndFeel::secondaryAccent);
+        addAndMakeVisible(operationBox);
+        operationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+            apvts, "operation", operationBox);
 
-        int initOp = static_cast<int>(apvts.getRawParameterValue("operation")->load());
-        if (initOp >= 0 && initOp < opButtons.size())
-            opButtons[initOp]->setToggleState(true, juce::dontSendNotification);
+        // Shape B dropdown
+        for (int i = 0; i < shapeNames.size(); ++i)
+            shapeBBox.addItem(shapeNames[i], i + 1);
+        setupComboBox(shapeBBox, SDFLookAndFeel::primaryAccent);
+        addAndMakeVisible(shapeBBox);
+        shapeBAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+            apvts, "shape2", shapeBBox);
 
-        // Scan mode buttons
-        juce::StringArray modeNames = { "CONTOUR", "MARCH", "ACOUSTIC", "GRAIN", "SPECTRAL", "TRAVERSE" };
-        for (int i = 0; i < modeNames.size(); ++i)
-        {
-            auto* btn = scanModeButtons.add(new juce::TextButton(modeNames[i]));
-            btn->setClickingTogglesState(true);
-            btn->setRadioGroupId(8888);
-            btn->setColour(juce::TextButton::buttonOnColourId, SDFLookAndFeel::secondaryAccent);
-            btn->setColour(juce::TextButton::textColourOnId, SDFLookAndFeel::secondaryAccent);
-            btn->setColour(juce::TextButton::textColourOffId, SDFLookAndFeel::mutedText);
-            btn->onClick = [this, i]()
-            {
-                if (auto* param = apvtsRef.getParameter("scanMode"))
-                    param->setValueNotifyingHost(param->convertTo0to1(static_cast<float>(i)));
-            };
-            addAndMakeVisible(btn);
-        }
-
-        int initMode = static_cast<int>(apvts.getRawParameterValue("scanMode")->load());
-        if (initMode >= 0 && initMode < scanModeButtons.size())
-            scanModeButtons[initMode]->setToggleState(true, juce::dontSendNotification);
+        // Scan mode dropdown
+        scanModeBox.addItem("Contour", 1);
+        scanModeBox.addItem("March", 2);
+        scanModeBox.addItem("Acoustic", 3);
+        scanModeBox.addItem("Grain", 4);
+        scanModeBox.addItem("Spectral", 5);
+        scanModeBox.addItem("Lissajous", 6);
+        setupComboBox(scanModeBox, SDFLookAndFeel::secondaryAccent);
+        addAndMakeVisible(scanModeBox);
+        scanModeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+            apvts, "scanMode", scanModeBox);
 
         // Onion toggle
         onionEnableBtn.setColour(juce::ToggleButton::tickColourId, SDFLookAndFeel::primaryAccent);
@@ -101,78 +90,91 @@ public:
         addAndMakeVisible(sfN3Knob);
         addAndMakeVisible(onionThicknessKnob);
         addAndMakeVisible(stairCountKnob);
+
+        // Section labels
+        addAndMakeVisible(shapeALabel);
+        addAndMakeVisible(operationLabel);
+        addAndMakeVisible(shapeBLabel);
+        addAndMakeVisible(scanLabel);
+        setupLabel(shapeALabel, "SHAPE A");
+        setupLabel(operationLabel, "OP");
+        setupLabel(shapeBLabel, "SHAPE B");
+        setupLabel(scanLabel, "SCAN");
     }
 
     void resized() override
     {
         auto bounds = getLocalBounds().reduced(4, 2);
+        bounds.removeFromTop(SDFLookAndFeel::scaledInt(18)); // panel header
         int pad = 2;
+        int comboH = 20;
+        int labelW = 48;
 
-        // Shape selectors (2 rows of 24px)
-        shapeASelector.setBounds(bounds.removeFromTop(24));
-        bounds.removeFromTop(pad);
-
-        // Operation buttons: 2 rows of 6
+        // Shape A: label + combo
         {
-            int cols = 6;
-            int opRows = (opButtons.size() + cols - 1) / cols;
-            for (int r = 0; r < opRows; ++r)
-            {
-                auto row = bounds.removeFromTop(18);
-                int start = r * cols;
-                int end = juce::jmin(start + cols, opButtons.size());
-                int count = end - start;
-                int bw = row.getWidth() / count;
-                for (int i = start; i < end; ++i)
-                    opButtons[i]->setBounds(row.removeFromLeft(bw));
-            }
+            auto row = bounds.removeFromTop(comboH);
+            shapeALabel.setBounds(row.removeFromLeft(labelW));
+            shapeABox.setBounds(row);
         }
         bounds.removeFromTop(pad);
 
-        shapeBSelector.setBounds(bounds.removeFromTop(24));
+        // Operation: label + combo
+        {
+            auto row = bounds.removeFromTop(comboH);
+            operationLabel.setBounds(row.removeFromLeft(labelW));
+            operationBox.setBounds(row);
+        }
         bounds.removeFromTop(pad);
 
-        // Scene knobs: 2 rows of 3
+        // Shape B: label + combo
+        {
+            auto row = bounds.removeFromTop(comboH);
+            shapeBLabel.setBounds(row.removeFromLeft(labelW));
+            shapeBBox.setBounds(row);
+        }
+        bounds.removeFromTop(pad);
+
+        // Scan mode: label + combo (moved up, before scene knobs)
+        {
+            auto row = bounds.removeFromTop(comboH);
+            scanLabel.setBounds(row.removeFromLeft(labelW));
+            scanModeBox.setBounds(row);
+        }
+        bounds.removeFromTop(pad);
+
+        // Remaining height split evenly into 4 knob rows
+        int remaining = bounds.getHeight();
+        int knobRowH = juce::jmax(SDFLookAndFeel::scaledInt(48), remaining / 4);
+
+        // Row 1: Scene knobs (SizeA, SizeB, OffX)
         {
             int kw = bounds.getWidth() / 3;
-            int kh = juce::jmax(1, static_cast<int>(bounds.getHeight() * 0.18f));
-            auto r1 = bounds.removeFromTop(kh);
-            sizeAKnob.setBounds(r1.removeFromLeft(kw));
-            sizeBKnob.setBounds(r1.removeFromLeft(kw));
-            offsetXKnob.setBounds(r1);
-            auto r2 = bounds.removeFromTop(kh);
-            offsetYKnob.setBounds(r2.removeFromLeft(kw));
-            smoothKKnob.setBounds(r2.removeFromLeft(kw));
-            twistKnob.setBounds(r2);
+            auto row = bounds.removeFromTop(knobRowH);
+            sizeAKnob.setBounds(row.removeFromLeft(kw));
+            sizeBKnob.setBounds(row.removeFromLeft(kw));
+            offsetXKnob.setBounds(row);
         }
-        bounds.removeFromTop(pad);
 
-        // Scan mode buttons: 2 rows of 3
+        // Row 2: Scene knobs (OffY, Smooth, Twist)
         {
-            auto sr1 = bounds.removeFromTop(18);
-            auto sr2 = bounds.removeFromTop(18);
-            int bw = sr1.getWidth() / 3;
-            for (int i = 0; i < scanModeButtons.size(); ++i)
-            {
-                auto& row = (i < 3) ? sr1 : sr2;
-                scanModeButtons[i]->setBounds(row.removeFromLeft(bw));
-            }
+            int kw = bounds.getWidth() / 3;
+            auto row = bounds.removeFromTop(knobRowH);
+            offsetYKnob.setBounds(row.removeFromLeft(kw));
+            smoothKKnob.setBounds(row.removeFromLeft(kw));
+            twistKnob.setBounds(row);
         }
-        bounds.removeFromTop(pad);
 
-        // Scan knobs: 1 row of 4
+        // Row 3: Scan knobs (Radius, Height, MRI, Scale)
         {
             int kw = bounds.getWidth() / 4;
-            int kh = juce::jmax(1, static_cast<int>(bounds.getHeight() * 0.35f));
-            auto row = bounds.removeFromTop(kh);
+            auto row = bounds.removeFromTop(knobRowH);
             scanRadiusKnob.setBounds(row.removeFromLeft(kw));
             scanHeightKnob.setBounds(row.removeFromLeft(kw));
             topoMorphKnob.setBounds(row.removeFromLeft(kw));
             distScaleKnob.setBounds(row);
         }
-        bounds.removeFromTop(pad);
 
-        // Bottom: SuperFormula + Onion + StairCount
+        // Row 4: SuperFormula + Onion + StairCount (takes remaining)
         {
             int kw = bounds.getWidth() / 6;
             auto row = bounds;
@@ -180,8 +182,8 @@ public:
             sfN1Knob.setBounds(row.removeFromLeft(kw));
             sfN2Knob.setBounds(row.removeFromLeft(kw));
             sfN3Knob.setBounds(row.removeFromLeft(kw));
-            onionEnableBtn.setBounds(row.removeFromLeft(24).reduced(0, 2));
-            onionThicknessKnob.setBounds(row.removeFromLeft(kw - 12));
+            onionEnableBtn.setBounds(row.removeFromLeft(22).reduced(0, 2));
+            onionThicknessKnob.setBounds(row.removeFromLeft(kw - 11));
             stairCountKnob.setBounds(row);
         }
     }
@@ -202,13 +204,38 @@ public:
     ArcKnob& getScanHeightKnob() { return scanHeightKnob; }
     ArcKnob& getTopoMorphKnob() { return topoMorphKnob; }
     ArcKnob& getDistScaleKnob() { return distScaleKnob; }
-    juce::OwnedArray<juce::TextButton>& getOpButtons() { return opButtons; }
-    juce::OwnedArray<juce::TextButton>& getScanModeButtons() { return scanModeButtons; }
+    juce::ComboBox& getScanModeBox() { return scanModeBox; }
+
+    void syncButtonsFromAPVTS()
+    {
+        // All selectors use ComboBoxAttachment — sync is automatic
+    }
 
 private:
-    ShapeSelector shapeASelector, shapeBSelector;
-    juce::OwnedArray<juce::TextButton> opButtons;
-    juce::OwnedArray<juce::TextButton> scanModeButtons;
+    static juce::StringArray getShapeNames()
+    {
+        return { "Sphere", "Box", "Torus", "Cylinder", "Octahedron", "Custom OBJ",
+                 "Capsule", "Round Box", "Hex Prism", "Torus 8/2", "Torus 8/8", "SuperFormula" };
+    }
+
+    static void setupComboBox(juce::ComboBox& box, juce::Colour textCol)
+    {
+        box.setColour(juce::ComboBox::backgroundColourId, SDFLookAndFeel::panelBg);
+        box.setColour(juce::ComboBox::textColourId, textCol);
+        box.setColour(juce::ComboBox::outlineColourId, SDFLookAndFeel::borderColour);
+    }
+
+    static void setupLabel(juce::Label& label, const juce::String& text)
+    {
+        label.setText(text, juce::dontSendNotification);
+        label.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), SDFLookAndFeel::scaled(9.f), juce::Font::bold));
+        label.setColour(juce::Label::textColourId, SDFLookAndFeel::mutedText);
+        label.setJustificationType(juce::Justification::centredRight);
+    }
+
+    juce::ComboBox shapeABox, shapeBBox, operationBox, scanModeBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> shapeAAttach, shapeBAttach, operationAttach, scanModeAttach;
+    juce::Label shapeALabel, operationLabel, shapeBLabel, scanLabel;
     ArcKnob sizeAKnob, sizeBKnob, offsetXKnob, offsetYKnob, smoothKKnob, twistKnob;
     ArcKnob scanRadiusKnob, scanHeightKnob, topoMorphKnob, distScaleKnob;
     ArcKnob sfMKnob, sfN1Knob, sfN2Knob, sfN3Knob;

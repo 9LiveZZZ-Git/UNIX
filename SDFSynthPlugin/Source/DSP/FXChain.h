@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "Constants.h"
 #include <cmath>
 #include <algorithm>
 
@@ -31,6 +32,9 @@ public:
         // Reverb
         reverb.reset();
         reverb.setSampleRate(sr);
+
+        // Pre-allocate dry signal scratch buffer
+        dryScratchBuffer.setSize(2, blockSize);
     }
 
     void reset()
@@ -102,10 +106,11 @@ public:
         // --- Chorus ---
         if (chorusEnabled)
         {
-            // Store dry signal
-            juce::AudioBuffer<float> dry(numChannels, numSamples);
+            // Store dry signal in pre-allocated scratch buffer
+            if (dryScratchBuffer.getNumSamples() < numSamples)
+                dryScratchBuffer.setSize(numChannels, numSamples, false, false, true);
             for (int ch = 0; ch < numChannels; ++ch)
-                dry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+                dryScratchBuffer.copyFrom(ch, 0, buffer, ch, 0, numSamples);
 
             juce::dsp::AudioBlock<float> block(buffer);
             juce::dsp::ProcessContextReplacing<float> ctx(block);
@@ -115,7 +120,7 @@ public:
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 float* out = buffer.getWritePointer(ch);
-                const float* dryData = dry.getReadPointer(ch);
+                const float* dryData = dryScratchBuffer.getReadPointer(ch);
                 for (int i = 0; i < numSamples; ++i)
                     out[i] = dryData[i] + chorusMix * (out[i] - dryData[i]);
             }
@@ -161,10 +166,11 @@ public:
         // --- Reverb ---
         if (reverbEnabled)
         {
-            // Store dry signal
-            juce::AudioBuffer<float> dry(numChannels, numSamples);
+            // Store dry signal in pre-allocated scratch buffer
+            if (dryScratchBuffer.getNumSamples() < numSamples)
+                dryScratchBuffer.setSize(numChannels, numSamples, false, false, true);
             for (int ch = 0; ch < numChannels; ++ch)
-                dry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+                dryScratchBuffer.copyFrom(ch, 0, buffer, ch, 0, numSamples);
 
             if (numChannels >= 2)
                 reverb.processStereo(buffer.getWritePointer(0), buffer.getWritePointer(1), numSamples);
@@ -175,7 +181,7 @@ public:
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 float* out = buffer.getWritePointer(ch);
-                const float* dryData = dry.getReadPointer(ch);
+                const float* dryData = dryScratchBuffer.getReadPointer(ch);
                 for (int i = 0; i < numSamples; ++i)
                     out[i] = dryData[i] + reverbMix * (out[i] - dryData[i]);
             }
@@ -192,7 +198,7 @@ private:
             case DistortionType::HardClip:
                 return std::clamp(x * distDrive, -1.f, 1.f);
             case DistortionType::Fold:
-                return std::sin(x * distDrive * 3.14159265f);
+                return std::sin(x * distDrive * sdf::PI);
             case DistortionType::Bitcrush:
             {
                 float q = std::max(2.f, std::round(distDrive * 2.f));
@@ -228,4 +234,7 @@ private:
     bool reverbEnabled = false;
     juce::Reverb reverb;
     float reverbMix = 0.3f;
+
+    // Pre-allocated scratch buffer for dry signal (avoids stack allocation on audio thread)
+    juce::AudioBuffer<float> dryScratchBuffer;
 };

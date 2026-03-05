@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
+#include <cassert>
 
 enum class ModSource : uint8_t
 {
@@ -76,6 +77,7 @@ public:
 
     const ModSlot& getWriteSlot(int index) const
     {
+        assert(index >= 0 && index < MAX_MOD_SLOTS);
         return buffers[writeIdx.load(std::memory_order_relaxed)].slots[static_cast<size_t>(
             std::clamp(index, 0, MAX_MOD_SLOTS - 1))];
     }

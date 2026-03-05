@@ -8,7 +8,8 @@ class OscTab : public juce::Component
 {
 public:
     OscTab(juce::AudioProcessorValueTreeState& apvts)
-        : oscFoldKnob(apvts, "oscFold", "Fold", SDFLookAndFeel::secondaryAccent),
+        : apvtsRef(apvts),
+          oscFoldKnob(apvts, "oscFold", "Fold", SDFLookAndFeel::secondaryAccent),
           oscPDKnob(apvts, "oscPhaseDist", "PD", SDFLookAndFeel::secondaryAccent),
           oscPWKnob(apvts, "oscPW", "PW", SDFLookAndFeel::secondaryAccent),
           oscSyncKnob(apvts, "oscSync", "Sync", SDFLookAndFeel::secondaryAccent),
@@ -50,11 +51,11 @@ public:
         oscBMixSelector.addItem("AM", 4);
         int initMix = static_cast<int>(apvts.getRawParameterValue("oscBMixMode")->load());
         oscBMixSelector.setSelectedId(initMix + 1, juce::dontSendNotification);
-        oscBMixSelector.onChange = [this, &apvts]()
+        oscBMixSelector.onChange = [this]()
         {
             int id = oscBMixSelector.getSelectedId();
             if (id > 0)
-                if (auto* p = apvts.getParameter("oscBMixMode"))
+                if (auto* p = apvtsRef.getParameter("oscBMixMode"))
                     p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(id - 1)));
         };
         oscBMixSelector.setColour(juce::ComboBox::backgroundColourId, SDFLookAndFeel::panelBg);
@@ -76,11 +77,11 @@ public:
         noiseTypeSelector.addItem("Brown", 3);
         int initNoise = static_cast<int>(apvts.getRawParameterValue("noiseType")->load());
         noiseTypeSelector.setSelectedId(initNoise + 1, juce::dontSendNotification);
-        noiseTypeSelector.onChange = [this, &apvts]()
+        noiseTypeSelector.onChange = [this]()
         {
             int id = noiseTypeSelector.getSelectedId();
             if (id > 0)
-                if (auto* p = apvts.getParameter("noiseType"))
+                if (auto* p = apvtsRef.getParameter("noiseType"))
                     p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(id - 1)));
         };
         noiseTypeSelector.setColour(juce::ComboBox::backgroundColourId, SDFLookAndFeel::panelBg);
@@ -93,11 +94,11 @@ public:
         oversampleSelector.addItem("4x", 3);
         int initOS = static_cast<int>(apvts.getRawParameterValue("oversample")->load());
         oversampleSelector.setSelectedId(initOS + 1, juce::dontSendNotification);
-        oversampleSelector.onChange = [this, &apvts]()
+        oversampleSelector.onChange = [this]()
         {
             int id = oversampleSelector.getSelectedId();
             if (id > 0)
-                if (auto* p = apvts.getParameter("oversample"))
+                if (auto* p = apvtsRef.getParameter("oversample"))
                     p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(id - 1)));
         };
         oversampleSelector.setColour(juce::ComboBox::backgroundColourId, SDFLookAndFeel::panelBg);
@@ -167,6 +168,7 @@ public:
     ArcKnob& getNoiseFilterKnob() { return noiseFilterKnob; }
 
 private:
+    juce::AudioProcessorValueTreeState& apvtsRef;
     ArcKnob oscFoldKnob, oscPDKnob, oscPWKnob, oscSyncKnob;
     ArcKnob uniVoicesKnob, uniDetuneKnob, uniSpreadKnob, uniBlendKnob;
     juce::ToggleButton oscBEnableBtn{ "B" };

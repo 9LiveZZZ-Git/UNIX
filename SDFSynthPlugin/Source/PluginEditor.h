@@ -13,6 +13,7 @@
 #include "GUI/FXTab.h"
 #include "GUI/ModTab.h"
 #include "GUI/VisTab.h"
+#include "GUI/ScanModeOverlay.h"
 #include "Utility/PresetManager.h"
 #include "Texture/ProceduralLibrary.h"
 
@@ -26,6 +27,7 @@ public:
     ~SDFSynthEditor() override;
 
     void paint(juce::Graphics&) override;
+    void paintOverChildren(juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
     void parameterChanged(const juce::String& parameterID, float newValue) override;
@@ -78,6 +80,9 @@ private:
     // Bottom strip (persistent)
     BottomStrip bottomStrip;
 
+    // Scan mode overlay (bottom-right of viewport)
+    ScanModeOverlay scanModeOverlay;
+
     // Voice activity meter
     int lastVoiceCount = 0;
     juce::Rectangle<int> voiceMeterBounds;
@@ -95,6 +100,7 @@ private:
     std::vector<ArcKnob::ModIndicator> modIndicatorScratch;
     void setupModRouting();
     void updateModDepthDisplays();
+    void updateScanLabels(int mode);
     ArcKnob* findKnobAt(juce::Point<int> pos);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SDFSynthEditor)
