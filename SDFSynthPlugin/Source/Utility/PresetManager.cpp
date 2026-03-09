@@ -328,9 +328,9 @@ std::vector<PresetManager::FactoryPreset> PresetManager::getFactoryPresets()
             {"fxReverbEnable", 0.f}, {"fxReverbSize", 0.5f}, {"fxReverbDamping", 0.5f}, {"fxReverbMix", 0.3f}
         }, "plasma", 2, PresetCategory::Lead },
 
-        // 8. Screaming Edge — SuperFormula+Capsule stairs union. Contour. Dist+delay.
+        // 8. Screaming Edge — SuperFormula+Capsule smooth intersect. Contour. Dist+delay.
         { "Screaming Edge", {
-            {"shape1", 11}, {"shape2", 6}, {"operation", 9}, {"smoothK", 0.4f},
+            {"shape1", 11}, {"shape2", 6}, {"operation", 4}, {"smoothK", 0.4f},
             {"size1", 0.45f}, {"size2", 0.3f}, {"offsetX", 0.2f}, {"offsetY", 0.f},
             {"twist", 1.2f}, {"scanRadius", 0.5f}, {"scanHeight", 0.f},
             {"topoMorph", 0.75f}, {"distScale", 4.f}, {"scanMode", 0.f},
