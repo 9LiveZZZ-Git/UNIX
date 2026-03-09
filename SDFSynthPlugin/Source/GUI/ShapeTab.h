@@ -34,7 +34,9 @@ public:
         shapeAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
             apvts, "shape1", shapeABox);
 
-        // Operation dropdown — manually assign IDs so we can skip Stairs (ID 10 = value 9)
+        // Operation dropdown — all 11 items must be present because JUCE
+        // ComboBoxAttachment maps by normalized value scaled to item count.
+        // Stairs is kept but disabled so users can't select it.
         operationBox.addItem("Smooth Union", 1);
         operationBox.addItem("Union", 2);
         operationBox.addItem("Intersection", 3);
@@ -44,7 +46,8 @@ public:
         operationBox.addItem("Chamfer Union", 7);
         operationBox.addItem("Chamfer Intersect", 8);
         operationBox.addItem("Chamfer Subtract", 9);
-        // Stairs (ID 10) removed
+        operationBox.addItem("Stairs", 10);
+        operationBox.setItemEnabled(10, false); // disabled — no longer offered
         operationBox.addItem("Pipe", 11);
         setupComboBox(operationBox, SDFLookAndFeel::secondaryAccent);
         addAndMakeVisible(operationBox);
