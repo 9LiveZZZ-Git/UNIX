@@ -93,9 +93,9 @@ public:
             // Define known ranges: paramId → {min, max}
             struct Range { float min, max; };
             std::map<juce::String, Range> ranges = {
-                {"shape1",          {0.f, 5.f}},
-                {"shape2",          {0.f, 5.f}},
-                {"operation",       {0.f, 3.f}},
+                {"shape1",          {0.f, 11.f}},
+                {"shape2",          {0.f, 11.f}},
+                {"operation",       {0.f, 10.f}},
                 {"smoothK",         {0.01f, 1.5f}},
                 {"size1",           {0.1f, 0.7f}},
                 {"size2",           {0.1f, 0.7f}},

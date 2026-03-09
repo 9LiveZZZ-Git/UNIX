@@ -4,11 +4,12 @@
 #include "SDFLookAndFeel.h"
 #include "ArcKnob.h"
 
-class ShapeTab : public juce::Component
+class ShapeTab : public juce::Component, private juce::Timer
 {
 public:
     ShapeTab(juce::AudioProcessorValueTreeState& apvts)
-        : sizeAKnob(apvts, "size1", "Size A", SDFLookAndFeel::primaryAccent),
+        : apvtsRef(apvts),
+          sizeAKnob(apvts, "size1", "Size A", SDFLookAndFeel::primaryAccent),
           sizeBKnob(apvts, "size2", "Size B", SDFLookAndFeel::primaryAccent),
           offsetXKnob(apvts, "offsetX", "Off X", SDFLookAndFeel::primaryAccent),
           offsetYKnob(apvts, "offsetY", "Off Y", SDFLookAndFeel::primaryAccent),
@@ -22,8 +23,7 @@ public:
           sfN1Knob(apvts, "sfN1", "SF N1", SDFLookAndFeel::secondaryAccent),
           sfN2Knob(apvts, "sfN2", "SF N2", SDFLookAndFeel::secondaryAccent),
           sfN3Knob(apvts, "sfN3", "SF N3", SDFLookAndFeel::secondaryAccent),
-          onionThicknessKnob(apvts, "onionThickness", "Shell", SDFLookAndFeel::secondaryAccent),
-          stairCountKnob(apvts, "stairCount", "Steps", SDFLookAndFeel::secondaryAccent)
+          onionThicknessKnob(apvts, "onionThickness", "Shell", SDFLookAndFeel::secondaryAccent)
     {
         // Shape A dropdown
         auto shapeNames = getShapeNames();
@@ -34,13 +34,21 @@ public:
         shapeAAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
             apvts, "shape1", shapeABox);
 
-        // Operation dropdown
-        juce::StringArray opNames = { "Smooth Union", "Union", "Intersection", "Subtraction",
-                                       "Smooth Intersect", "Smooth Subtract",
-                                       "Chamfer Union", "Chamfer Intersect", "Chamfer Subtract",
-                                       "Stairs", "Pipe" };
-        for (int i = 0; i < opNames.size(); ++i)
-            operationBox.addItem(opNames[i], i + 1);
+        // Operation dropdown — all 11 items must be present because JUCE
+        // ComboBoxAttachment maps by normalized value scaled to item count.
+        // Stairs is kept but disabled so users can't select it.
+        operationBox.addItem("Smooth Union", 1);
+        operationBox.addItem("Union", 2);
+        operationBox.addItem("Intersection", 3);
+        operationBox.addItem("Subtraction", 4);
+        operationBox.addItem("Smooth Intersect", 5);
+        operationBox.addItem("Smooth Subtract", 6);
+        operationBox.addItem("Chamfer Union", 7);
+        operationBox.addItem("Chamfer Intersect", 8);
+        operationBox.addItem("Chamfer Subtract", 9);
+        operationBox.addItem("Stairs", 10);
+        operationBox.setItemEnabled(10, false); // disabled — no longer offered
+        operationBox.addItem("Pipe", 11);
         setupComboBox(operationBox, SDFLookAndFeel::secondaryAccent);
         addAndMakeVisible(operationBox);
         operationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -87,7 +95,6 @@ public:
         addAndMakeVisible(sfN2Knob);
         addAndMakeVisible(sfN3Knob);
         addAndMakeVisible(onionThicknessKnob);
-        addAndMakeVisible(stairCountKnob);
 
         // Section labels
         addAndMakeVisible(shapeALabel);
@@ -98,7 +105,13 @@ public:
         setupLabel(operationLabel, "OP");
         setupLabel(shapeBLabel, "SHAPE B");
         setupLabel(scanLabel, "SCAN");
+
+        // Initial visibility
+        updateConditionalVisibility();
+        startTimerHz(10);
     }
+
+    ~ShapeTab() override { stopTimer(); }
 
     void resized() override
     {
@@ -132,9 +145,14 @@ public:
         }
         bounds.removeFromTop(pad);
 
-        // Remaining height split into scene knobs, scan combo, scan knobs, SF row
+        // Remaining height split into scene knobs, scan combo, scan knobs, conditional row
+        bool showSF = sfMKnob.isVisible();
+        bool showOnion = onionThicknessKnob.isVisible();
+        bool hasRow4 = showSF || showOnion || onionEnableBtn.isVisible();
+
         int remaining = bounds.getHeight();
-        int knobRowH = juce::jmax(SDFLookAndFeel::scaledInt(48), (remaining - comboH - pad) / 4);
+        int numKnobRows = hasRow4 ? 4 : 3;
+        int knobRowH = juce::jmax(SDFLookAndFeel::scaledInt(48), (remaining - comboH - pad) / numKnobRows);
 
         // Row 1: Scene knobs (SizeA, SizeB, OffX)
         {
@@ -172,17 +190,24 @@ public:
             distScaleKnob.setBounds(row);
         }
 
-        // Row 4: SuperFormula + Onion + StairCount (takes remaining)
+        // Row 4: Conditional — SuperFormula knobs + Onion toggle/thickness
+        if (hasRow4)
         {
-            int kw = bounds.getWidth() / 6;
             auto row = bounds;
-            sfMKnob.setBounds(row.removeFromLeft(kw));
-            sfN1Knob.setBounds(row.removeFromLeft(kw));
-            sfN2Knob.setBounds(row.removeFromLeft(kw));
-            sfN3Knob.setBounds(row.removeFromLeft(kw));
+            int numVisible = (showSF ? 4 : 0) + 1 + (showOnion ? 1 : 0); // +1 for toggle
+            int kw = bounds.getWidth() / juce::jmax(1, numVisible);
+
+            if (showSF)
+            {
+                sfMKnob.setBounds(row.removeFromLeft(kw));
+                sfN1Knob.setBounds(row.removeFromLeft(kw));
+                sfN2Knob.setBounds(row.removeFromLeft(kw));
+                sfN3Knob.setBounds(row.removeFromLeft(kw));
+            }
+
             onionEnableBtn.setBounds(row.removeFromLeft(22).reduced(0, 2));
-            onionThicknessKnob.setBounds(row.removeFromLeft(juce::jmax(0, kw - 11)));
-            stairCountKnob.setBounds(row);
+            if (showOnion)
+                onionThicknessKnob.setBounds(row);
         }
     }
 
@@ -205,6 +230,29 @@ public:
     juce::ComboBox& getScanModeBox() { return scanModeBox; }
 
 private:
+    void timerCallback() override { updateConditionalVisibility(); }
+
+    void updateConditionalVisibility()
+    {
+        int s1 = static_cast<int>(apvtsRef.getRawParameterValue("shape1")->load());
+        int s2 = static_cast<int>(apvtsRef.getRawParameterValue("shape2")->load());
+        bool needsSF = (s1 == 11 || s2 == 11); // SuperFormula
+        bool needsOnion = apvtsRef.getRawParameterValue("onionEnable")->load() > 0.5f;
+
+        bool changed = false;
+        if (sfMKnob.isVisible() != needsSF) { sfMKnob.setVisible(needsSF); changed = true; }
+        if (sfN1Knob.isVisible() != needsSF) { sfN1Knob.setVisible(needsSF); changed = true; }
+        if (sfN2Knob.isVisible() != needsSF) { sfN2Knob.setVisible(needsSF); changed = true; }
+        if (sfN3Knob.isVisible() != needsSF) { sfN3Knob.setVisible(needsSF); changed = true; }
+        if (onionThicknessKnob.isVisible() != needsOnion) { onionThicknessKnob.setVisible(needsOnion); changed = true; }
+
+        if (changed)
+        {
+            resized();
+            repaint();
+        }
+    }
+
     static juce::StringArray getShapeNames()
     {
         return { "Sphere", "Box", "Torus", "Cylinder", "Octahedron", "Custom OBJ",
@@ -226,13 +274,14 @@ private:
         label.setJustificationType(juce::Justification::centredRight);
     }
 
+    juce::AudioProcessorValueTreeState& apvtsRef;
     juce::ComboBox shapeABox, shapeBBox, operationBox, scanModeBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> shapeAAttach, shapeBAttach, operationAttach, scanModeAttach;
     juce::Label shapeALabel, operationLabel, shapeBLabel, scanLabel;
     ArcKnob sizeAKnob, sizeBKnob, offsetXKnob, offsetYKnob, smoothKKnob, twistKnob;
     ArcKnob scanRadiusKnob, scanHeightKnob, topoMorphKnob, distScaleKnob;
     ArcKnob sfMKnob, sfN1Knob, sfN2Knob, sfN3Knob;
-    ArcKnob onionThicknessKnob, stairCountKnob;
+    ArcKnob onionThicknessKnob;
     juce::ToggleButton onionEnableBtn{ "Onion" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onionEnableAttach;
 };
